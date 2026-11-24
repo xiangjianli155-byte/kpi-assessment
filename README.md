@@ -1,26 +1,40 @@
 # KPI 考核
 
-Streamlit 网页应用，用于分析 On Hand INV 和 EO KPI 工作簿中的 Planner、WHS、实际值、标准值和达标状态，并导出当前视图为 PowerPoint 或 PDF。
+Streamlit 网页应用，用于查看 On Hand INV 和 EO KPI 的 Planner、WHS、实际值、标准值和达标情况，并导出 PDF 或 PowerPoint。
 
-## 网站使用方式
+## 网站和数据权限
 
-网站默认读取仓库中的共享数据文件 `data/current_kpi.xlsx`。打开网站的人会看到同一份最新数据。左侧临时上传器只会更改当前浏览会话，不会更新其他人的共享数据。
+- GitHub 源仓库 `xiangjianli155-byte/kpi-assessment` 保持私有，网站可设置为公开供所有人查看。
+- 网站展示的数据对访客可见；只有通过管理员密码验证的人能上传数据。
+- 管理员从网站上传的每一批文件会追加到私有仓库的 `data/weekly/` 历史中，不会覆盖之前批次。
+- 多批数据按上传时间合并；同一日期、Planner 和 WHS 重复时，采用较新的记录。
+- 不需要每周手动登录 GitHub 上传工作簿。
 
-## 发布成可分享的网站
+## 发布网站
 
-1. 在 GitHub 新建一个**私有仓库**，例如 `kpi-assessment`。
-2. 上传本文件夹中的 `app.py`、`requirements.txt`、`README.md`、`.gitignore` 和 `data/README.md`。
-3. 将每周使用的 Excel 上传到仓库中的固定路径 `data/current_kpi.xlsx`。不要把仓库改成公开；这样原始工作簿保留在私有仓库中。
-4. 登录 Streamlit Community Cloud，连接 GitHub，选择此私有仓库，入口文件填 `app.py` 并部署。
-5. 在应用的 Sharing 设置里将应用设为 public，然后把 Streamlit 给出的网址发给同事。
+1. 在 [Streamlit Community Cloud](https://share.streamlit.io/) 登录并连接 GitHub。
+2. 选择私有仓库 `xiangjianli155-byte/kpi-assessment`，分支选 `main`，入口文件选 `app.py`，然后部署。
+3. 在应用设置的 **Secrets** 中配置下面两项。不要把真实值写进 GitHub 文件或发在聊天里。
 
-**访问范围：**Streamlit Community Cloud 的公开访问选项是“public and searchable”。这意味着收到网址的人可以访问，网站也可能被其他人发现；页面会显示共享工作簿中的 KPI 数据。请只在公司允许这些 KPI 数据公开给所有访问者时使用此模式。如果要限制为指定同事，需要选择私有访问并邀请他们登录。
+   ```toml
+   GITHUB_TOKEN = "你的细粒度 GitHub token"
+   KPI_UPLOAD_PASSWORD = "你自己设置的管理员密码"
+   ```
 
-## 每周更新共享数据
+   创建 GitHub token 时，只授权 `kpi-assessment` 这个仓库，并将 **Contents** 权限设为 **Read and write**。网站用它把上传批次写入私有仓库。
 
-在私有 GitHub 仓库中替换 `data/current_kpi.xlsx` 并提交更改。Streamlit 会根据仓库更新网站，所有访问者随后会看到新数据。不要将工作簿放进公开仓库。
+4. 在应用 **Sharing** 设置中设为公开，然后把 Streamlit 网址发给同事。公开应用可能被搜索引擎收录，所有访客都能看到页面展示的 KPI 数据。
 
-## 在 VS Code 中本地运行
+## 每周从网站上传
+
+1. 打开网站左侧的 **管理员上传每周数据**。
+2. 输入 `KPI_UPLOAD_PASSWORD` 中配置的管理员密码。
+3. 选择一个或多个 `.xlsx`、`.xlsm`、`.xls` 或 `.csv` 文件。
+4. 确认文件名后点击 **追加到共享历史**。
+
+上传批次会保存到私有 GitHub 仓库，Streamlit Cloud 同步完成后，访客刷新页面即可看到累计数据。上传的文件需要包含当前 KPI 分析支持的 Planner、WHS、实际值和目标值字段；不同工作簿结构可在页面中进行字段映射。
+
+## 本地运行
 
 使用 Python 3.11 或更新版本，在终端运行：
 
@@ -30,5 +44,5 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-本机运行时若仓库中没有 `data/current_kpi.xlsx`，可在左侧上传 Excel；这种临时上传只对当前会话可见。
+本地查看已提交的历史批次不需要 GitHub Secrets。要在本地使用共享上传功能，需在 `.streamlit/secrets.toml` 设置与云端相同的两个配置；该文件已被 `.gitignore` 忽略，切勿提交真实 token 或密码。
 
