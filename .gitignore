@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+.streamlit/secrets.toml
+
+# The private GitHub repo's shared workbook is the only Excel file to track.
+!data/current_kpi.xlsx
+
