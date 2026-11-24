@@ -1,47 +1,44 @@
-# KPI 考核
+# KPI 考核网站
 
-Streamlit 网页应用，用于查看 On Hand INV 和 EO KPI 的 Planner、WHS、实际值、标准值和达标情况，并导出 PDF 或 PowerPoint。
+这是一个 GitHub Pages 静态网页，直接在浏览器中读取 Excel。网站不使用 Python、Streamlit 或服务器端上传；普通访客只能查看、筛选和导出数据。
 
-## 网站和数据权限
+## 网站地址
 
-- GitHub 源仓库 `xiangjianli155-byte/kpi-assessment` 保持私有，网站可设置为公开供所有人查看。
-- 网站展示的数据对访客可见；任何访客都可以从网站上传数据。
-- 每一批上传都会追加到私有仓库的 `data/weekly/` 历史中，不会覆盖之前批次。
-- 多批数据按上传时间合并；同一日期、Planner 和 WHS 重复时，采用较新的记录。
-- 不需要每周手动登录 GitHub 上传工作簿。
+仓库 `xiangjianli155-byte/kpi-assessment` 对应的项目网站地址是：
+
+**https://xiangjianli155-byte.github.io/kpi-assessment/**
 
 ## 发布网站
 
-1. 在 GitHub 生成细粒度访问令牌：头像 → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**。
-2. 将 **Repository access** 设为 **Only select repositories**，只选择 `kpi-assessment`；在 **Repository permissions** 中将 **Contents** 设为 **Read and write**，再生成并复制 token。[GitHub 官方创建说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
-3. 在 [Streamlit Community Cloud](https://share.streamlit.io/) 登录并连接 GitHub。如果看不到私有仓库，在 Streamlit 工作区设置中授权访问 private repositories。
-4. 点击 **Create app**，选择仓库 `xiangjianli155-byte/kpi-assessment`、分支 `main`、入口 `app.py`。在 **Advanced settings → Secrets** 中粘贴：
+网页入口 `index.html` 已放在仓库根目录。到 GitHub 仓库的 **Settings → Pages**：
 
-   ```toml
-   GITHUB_TOKEN = "你的细粒度 GitHub token"
-   ```
+1. 在 **Build and deployment** 的 **Source** 中选择 **Deploy from a branch**。
+2. Branch 选择 **main**，文件夹选择 **/(root)**，点击 **Save**。
+3. 等 Pages 显示已发布后，打开上面的网站地址。
 
-   这个 token 仅供网站后台保存访客上传的数据，访客不会看到或输入它。不要把真实 token 写进 GitHub 文件或发在聊天里。
+GitHub Pages 的项目网址使用 `用户名.github.io/仓库名/`。Pages 要求入口 `index.html` 位于所选发布目录顶层。[GitHub Pages 发布源说明](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) · [404 排查说明](https://docs.github.com/en/pages/getting-started-with-github-pages/troubleshooting-404-errors-for-github-pages-sites)
 
-5. 部署后，在应用 **Sharing** 设置中设为公开，然后把 Streamlit 网址发给同事。公开应用可能被搜索引擎收录，所有访客都能看到页面展示的 KPI 数据，也都能追加上传批次。
+如果仓库目前是私有仓库，GitHub Free 不支持从私有仓库发布 Pages；需要使用支持私有 Pages 的付费方案，或将仓库改为公开。无论仓库是否公开，发布后的 Pages 网站和里面的数据都能被任何访客查看。当前 KPI 工作簿也会通过网站公开提供，请确认工作簿可公开分享后再提交。[GitHub Pages 计划与可见性说明](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 
-## 每周从网站上传
+## 每周更新 Excel
 
-1. 打开网站左侧的 **共享数据**。
-2. 选择一个或多个 `.xlsx`、`.xlsm`、`.xls` 或 `.csv` 文件。
-3. 确认文件名后点击 **追加到共享历史**。
+1. 在仓库打开 `data` 文件夹。
+2. 上传最新工作簿，文件名固定为 **`current_kpi.xlsx`**，覆盖旧版本并提交到 **main**。
+3. Pages 更新完成后，刷新网站。所有访客会看到同一份最新数据。
 
-上传批次会保存到私有 GitHub 仓库，Streamlit Cloud 同步完成后，访客刷新页面即可看到累计数据。上传的文件需要包含当前 KPI 分析支持的 Planner、WHS、实际值和目标值字段；不同工作簿结构可在页面中进行字段映射。
+网站自动寻找名称包含 `INV` 和 `EO` 的工作表，并识别 Planner、WHS、Actual/实际、Target/目标和日期列。保持这几类字段及日期列结构，替换数据时就不需要改网页代码。数据上传者需要有仓库写入权限；网页访客没有上传按钮。
 
-## 本地运行
+## 页面功能
 
-使用 Python 3.11 或更新版本，在终端运行：
+- On Hand INV 与 EO 专题切换
+- Planner、按周/按月、日期范围和达标方向筛选
+- 全部 Planner 实际值与标准值对比；单 Planner 显示期间变化
+- Planner × WHS 实际值、标准值、差额和达标情况
+- 导出 PDF（浏览器打印窗口中选择“另存为 PDF”）和 PowerPoint
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
+金额单位为 USD。PDF 和 PowerPoint 由访问者的浏览器生成。
 
-本地查看已提交的历史批次不需要 GitHub Secrets。要在本地启用共享上传功能，需在 `.streamlit/secrets.toml` 设置 `GITHUB_TOKEN`；该文件已被 `.gitignore` 忽略，切勿提交真实 token。
+## 网页依赖
+
+网页通过 CDN 加载 SheetJS、Chart.js 和 PptxGenJS。浏览器需要能访问这些 CDN；无需安装 Python 或运行 `pip install`。
 
