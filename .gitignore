@@ -2,12 +2,10 @@
 __pycache__/
 *.py[cod]
 *.xlsx
+!data/current_kpi.xlsx
 *.xlsm
 *.xls
 *.csv
-*.zip
 .streamlit/secrets.toml
 
-# Shared upload batches are the only archives tracked in the private repo.
-!data/weekly/*.zip
 
