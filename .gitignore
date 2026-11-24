@@ -5,8 +5,9 @@ __pycache__/
 *.xlsm
 *.xls
 *.csv
+*.zip
 .streamlit/secrets.toml
 
-# The private GitHub repo's shared workbook is the only Excel file to track.
-!data/current_kpi.xlsx
+# Shared upload batches are the only archives tracked in the private repo.
+!data/weekly/*.zip
 
