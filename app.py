@@ -3,12 +3,17 @@ from __future__ import annotations
 import io
 import re
 import calendar
-from datetime import date, datetime, timedelta
+import base64
+import hmac
+import zipfile
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 
@@ -16,6 +21,9 @@ RED = "#c43d47"
 GREEN = "#187348"
 BLUE = "#3568b8"
 TARGET = "#718096"
+GITHUB_REPOSITORY = "xiangjianli155-byte/kpi-assessment"
+GITHUB_BRANCH = "main"
+SHARED_UPLOAD_TYPES = {".xlsx", ".xlsm", ".xls", ".csv"}
 CANONICAL_PLANNERS = {
     "li chao": "Li Chao",
     "she xiaolei": "She xiaolei",
@@ -604,6 +612,130 @@ def load_topic_data(
     result = result.sort_values(["date", "_source_order"], na_position="first")
     result = result.drop_duplicates(["date", "Planner", "WHS"], keep="last")
     return result.reset_index(drop=True), notes
+
+
+def get_app_secret(name: str) -> str:
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
+def validate_uploads(files: list[Any]) -> list[dict[str, Any]]:
+    validated: list[dict[str, Any]] = []
+    for uploaded in files:
+        filename = Path(uploaded.name).name
+        suffix = Path(filename).suffix.casefold()
+        if suffix not in SHARED_UPLOAD_TYPES:
+            raise ValueError(f"不支持的文件格式：{filename}")
+
+        file_bytes = uploaded.getvalue()
+        if not file_bytes:
+            raise ValueError(f"文件为空：{filename}")
+
+        names = sheet_names(file_bytes, filename)
+        if not names:
+            raise ValueError(f"工作簿没有可读取的工作表：{filename}")
+
+        readable_sheet = False
+        for sheet in names:
+            try:
+                raw = read_raw_sheet(file_bytes, filename, sheet)
+            except Exception:
+                continue
+            if not raw.dropna(how="all").empty:
+                readable_sheet = True
+                break
+        if not readable_sheet:
+            raise ValueError(f"文件中没有可读取的数据：{filename}")
+
+        validated.append({"name": filename, "bytes": file_bytes})
+    if not validated:
+        raise ValueError("请先选择至少一个 Excel 或 CSV 文件。")
+    return validated
+
+
+def build_batch_archive(files: list[dict[str, Any]]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, file in enumerate(files, start=1):
+            safe_name = Path(file["name"]).name.replace("/", "_").replace("\\", "_")
+            archive.writestr(f"{index:02d}_{safe_name}", file["bytes"])
+    return output.getvalue()
+
+
+def make_batch_name() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{timestamp}_{uuid4().hex[:8]}.zip"
+
+
+def commit_batch_to_github(archive_bytes: bytes, batch_name: str) -> None:
+    token = get_app_secret("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("尚未配置 GitHub 上传凭据，请检查 Streamlit Cloud 的 Secrets。")
+
+    url = (
+        "https://api.github.com/repos/"
+        f"{GITHUB_REPOSITORY}/contents/data/weekly/{batch_name}"
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {
+        "message": f"Add weekly KPI data batch {batch_name}",
+        "content": base64.b64encode(archive_bytes).decode("ascii"),
+        "branch": GITHUB_BRANCH,
+    }
+    try:
+        response = requests.put(url, headers=headers, json=payload, timeout=60)
+    except requests.RequestException as exc:
+        raise RuntimeError("连接 GitHub 失败，请稍后重试。") from exc
+
+    if response.status_code not in (200, 201):
+        try:
+            detail = str(response.json().get("message", ""))
+        except (ValueError, AttributeError):
+            detail = ""
+        suffix = f"：{detail}" if detail else "。"
+        raise RuntimeError(f"GitHub 保存失败（HTTP {response.status_code}）{suffix}")
+
+
+def read_shared_batches(
+    data_dir: Path,
+) -> tuple[list[dict[str, Any]], list[str], set[str]]:
+    sources: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    batch_names: set[str] = set()
+    weekly_dir = data_dir / "weekly"
+
+    if not weekly_dir.is_dir():
+        return sources, warnings, batch_names
+
+    for archive_path in sorted(weekly_dir.glob("*.zip")):
+        batch_names.add(archive_path.name)
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                members = [
+                    item for item in archive.infolist()
+                    if not item.is_dir()
+                    and Path(item.filename).suffix.casefold() in SHARED_UPLOAD_TYPES
+                ]
+                if not members:
+                    warnings.append(f"{archive_path.name}：压缩包中没有可读取的数据文件。")
+                    continue
+                for item in members:
+                    display_name = f"{archive_path.stem} · {Path(item.filename).name}"
+                    sources.append({
+                        "name": display_name,
+                        "bytes": archive.read(item),
+                        "index": len(sources),
+                    })
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            warnings.append(f"{archive_path.name}：无法读取共享批次（{exc}）。")
+
+    return sources, warnings, batch_names
 
 
 def status_for(actual: Any, target: Any, lower_better: bool) -> str:
@@ -1504,39 +1636,86 @@ def render_topic(topic: str, data: pd.DataFrame, source_note: str) -> None:
 
 def main() -> None:
     st.title("KPI 考核")
-    st.caption("默认读取 GitHub 私有仓库中的共享工作簿；也可临时上传 Excel，仅当前浏览会话使用。")
+    st.caption("每周上传的数据会累积到共享历史中；所有访客查看同一份 KPI 数据。")
 
-    shared_workbook = Path(__file__).resolve().parent / "data" / "current_kpi.xlsx"
+    data_dir = Path(__file__).resolve().parent / "data"
+    shared_password = get_app_secret("KPI_UPLOAD_PASSWORD")
+    github_token = get_app_secret("GITHUB_TOKEN")
     with st.sidebar:
-        st.header("数据源")
-        uploaded = st.file_uploader(
-            "临时上传 Excel/CSV（仅当前会话）",
-            type=["xlsx", "xlsm", "xls", "csv"],
-            accept_multiple_files=True,
-            help="上传文件只会覆盖你当前的浏览会话，不会更新所有人的共享数据。共享更新请在私有 GitHub 仓库中替换 data/current_kpi.xlsx。",
-        )
+        st.header("共享数据")
+        st.caption("网站对外开放查看；上传共享数据需要管理员密码。")
+        with st.expander("管理员上传每周数据"):
+            if not shared_password or not github_token:
+                st.info("管理员上传尚未完成配置。请按部署说明在 Streamlit Cloud 设置 Secrets。")
+            else:
+                if not st.session_state.get("kpi_admin_authenticated", False):
+                    password = st.text_input("管理员密码", type="password", key="kpi_admin_password_input")
+                    if st.button("验证", key="kpi_admin_verify"):
+                        is_valid = hmac.compare_digest(
+                            password.encode("utf-8"), shared_password.encode("utf-8")
+                        )
+                        st.session_state["kpi_admin_authenticated"] = is_valid
+                        if is_valid:
+                            st.rerun()
+                        st.error("密码不正确。")
+                    st.caption("通过验证后即可把一批 Excel 数据追加到共享历史。")
 
-    if uploaded:
-        sources = [
-            {"name": item.name, "bytes": item.getvalue(), "index": index}
-            for index, item in enumerate(uploaded)
-        ]
+                if st.session_state.get("kpi_admin_authenticated", False):
+                    st.success("管理员已验证")
+                    if st.button("退出管理员模式", key="kpi_admin_logout"):
+                        st.session_state["kpi_admin_authenticated"] = False
+                        st.rerun()
+
+                    with st.form("kpi_shared_upload_form", clear_on_submit=True):
+                        uploaded_files = st.file_uploader(
+                            "选择本周 Excel/CSV 文件（可多选）",
+                            type=["xlsx", "xlsm", "xls", "csv"],
+                            accept_multiple_files=True,
+                            key="kpi_shared_batch_files",
+                        )
+                        if uploaded_files:
+                            st.caption("本批次文件：" + "、".join(file.name for file in uploaded_files))
+                        submit_upload = st.form_submit_button("追加到共享历史")
+
+                    if submit_upload:
+                        try:
+                            validated_files = validate_uploads(uploaded_files or [])
+                            archive_bytes = build_batch_archive(validated_files)
+                            batch_name = make_batch_name()
+                            commit_batch_to_github(archive_bytes, batch_name)
+
+                            pending_batches = st.session_state.setdefault("kpi_pending_batches", {})
+                            pending_batches[batch_name] = validated_files
+                            st.session_state["kpi_pending_batches"] = pending_batches
+                            st.success("上传成功，已添加到共享历史。")
+                            st.info("网站正在同步新数据；其他访客刷新后即可看到更新。")
+                        except Exception as exc:
+                            st.error(f"上传失败：{exc}")
+
+    sources, archive_warnings, stored_batch_names = read_shared_batches(data_dir)
+    pending_batches = st.session_state.get("kpi_pending_batches", {})
+    for batch_name, files in sorted(pending_batches.items()):
+        if batch_name in stored_batch_names:
+            continue
+        batch_label = Path(batch_name).stem
+        for file in files:
+            sources.append({
+                "name": f"{batch_label} · {file['name']}",
+                "bytes": file["bytes"],
+                "index": len(sources),
+            })
+
+    if archive_warnings:
         with st.sidebar:
-            st.caption("当前视图使用你刚上传的文件；其他访问者不会看到这次上传。")
-    elif shared_workbook.is_file():
-        sources = [{
-            "name": shared_workbook.name,
-            "bytes": shared_workbook.read_bytes(),
-            "index": 0,
-        }]
-        with st.sidebar:
-            st.caption("当前视图使用共享文件 data/current_kpi.xlsx。")
-    else:
-        st.info(
-            "共享工作簿还未加入网站。请在 GitHub 私有仓库中上传 Excel，路径设为 "
-            "data/current_kpi.xlsx；或在左侧临时上传文件，仅当前会话可见。"
-        )
+            for warning in archive_warnings:
+                st.warning(warning)
+
+    if not sources:
+        st.info("目前还没有共享 KPI 数据。管理员可在左侧验证身份后，上传第一批 Excel 文件。")
         st.stop()
+
+    with st.sidebar:
+        st.caption(f"当前累计 {len(sources)} 个数据文件；每次上传会追加新批次。")
 
     source_labels = [f"{index + 1}. {source['name']}" for index, source in enumerate(sources)]
     with st.sidebar:
@@ -1544,9 +1723,9 @@ def main() -> None:
         active_index = source_labels.index(active_label)
         active_file = sources[active_index]
         merge_uploads = st.checkbox(
-            "合并上传的同结构工作簿",
+            "合并累计历史文件",
             value=len(sources) > 1,
-            help="适合每周上传结构相同的文件；同一 Planner/WHS/日期重复时保留列表中靠后的文件。",
+            help="按上传先后合并；同一日期、Planner 和 WHS 重复时采用较新的记录。",
         )
         try:
             available_sheets = sheet_names(active_file["bytes"], active_file["name"])
