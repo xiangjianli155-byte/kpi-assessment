@@ -12,17 +12,18 @@ Streamlit 网页应用，用于查看 On Hand INV 和 EO KPI 的 Planner、WHS�
 
 ## 发布网站
 
-1. 在 [Streamlit Community Cloud](https://share.streamlit.io/) 登录并连接 GitHub。
-2. 选择私有仓库 `xiangjianli155-byte/kpi-assessment`，分支选 `main`，入口文件选 `app.py`，然后部署。
-3. 在应用设置的 **Secrets** 中配置 GitHub 写入凭据。不要把真实 token 写进 GitHub 文件或发在聊天里。
+1. 在 GitHub 生成细粒度访问令牌：头像 → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**。
+2. 将 **Repository access** 设为 **Only select repositories**，只选择 `kpi-assessment`；在 **Repository permissions** 中将 **Contents** 设为 **Read and write**，再生成并复制 token。[GitHub 官方创建说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+3. 在 [Streamlit Community Cloud](https://share.streamlit.io/) 登录并连接 GitHub。如果看不到私有仓库，在 Streamlit 工作区设置中授权访问 private repositories。
+4. 点击 **Create app**，选择仓库 `xiangjianli155-byte/kpi-assessment`、分支 `main`、入口 `app.py`。在 **Advanced settings → Secrets** 中粘贴：
 
    ```toml
    GITHUB_TOKEN = "你的细粒度 GitHub token"
    ```
 
-   创建 GitHub token 时，只授权 `kpi-assessment` 这个仓库，并将 **Contents** 权限设为 **Read and write**。网站后台用它把访客上传的批次写入私有仓库，访客无需输入 token。
+   这个 token 仅供网站后台保存访客上传的数据，访客不会看到或输入它。不要把真实 token 写进 GitHub 文件或发在聊天里。
 
-4. 在应用 **Sharing** 设置中设为公开，然后把 Streamlit 网址发给同事。公开应用可能被搜索引擎收录，所有访客都能看到页面展示的 KPI 数据。
+5. 部署后，在应用 **Sharing** 设置中设为公开，然后把 Streamlit 网址发给同事。公开应用可能被搜索引擎收录，所有访客都能看到页面展示的 KPI 数据，也都能追加上传批次。
 
 ## 每周从网站上传
 
