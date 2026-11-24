@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f7fb" />
+    <meta name="description" content="On Hand INV 与 EO KPI 考核仪表盘" />
+    <title>KPI 考核</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0" defer></script>
+    <script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.bundle.js" defer></script>
+    <script type="module" src="./assets/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="KPI 考核首页">
+          <span class="brand-mark">K</span>
+          <span>
+            <strong>KPI 考核</strong>
+            <small>MOVEX · PERFORMANCE DASHBOARD</small>
+          </span>
+        </a>
+        <div class="header-actions">
+          <span id="data-status" class="data-status"><i></i>正在读取数据</span>
+          <a id="update-data-link" class="update-link" href="https://github.com/xiangjianli155-byte/kpi-assessment/upload/main/data" target="_blank" rel="noreferrer">更新 Excel</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro-row">
+          <div>
+            <p class="eyebrow">OPERATIONS · KPI REVIEW</p>
+            <h1>团队绩效总览</h1>
+            <p class="intro-copy">按专题、Planner、期间和 WHS 查看实际值与目标表现。</p>
+          </div>
+          <div class="source-pill" id="source-label">数据源：data/current_kpi.xlsx</div>
+        </section>
+
+        <section id="load-error" class="notice notice-info" hidden>
+          <div class="notice-icon">i</div>
+          <div>
+            <strong>暂时没有可读取的 KPI 工作簿</strong>
+            <p>网站管理员需要把 KPI 工作簿放到仓库的数据文件夹，文件名为 <code>current_kpi.xlsx</code>。文件发布后刷新页面即可查看。</p>
+          </div>
+        </section>
+
+        <nav class="topic-tabs" aria-label="KPI 专题">
+          <button class="topic-tab active" type="button" data-topic="INV"><span class="tab-dot inv-dot"></span>On Hand INV 专题</button>
+          <button class="topic-tab" type="button" data-topic="EO"><span class="tab-dot eo-dot"></span>EO 专题</button>
+        </nav>
+
+        <section id="topic-INV" class="topic-panel active" aria-label="On Hand INV 专题">
+          <div class="filter-card" id="filters-INV"></div>
+          <div class="summary-grid" id="summary-INV"></div>
+          <section id="time-note-INV" class="notice notice-info" hidden><div class="notice-icon">i</div><div><strong>当前文件没有周度记录</strong><p>请切换到“按月”查看，或更新包含每周日期的数据。</p></div></section>
+          <section class="panel chart-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">ACTUAL VS STANDARD</p><h2 id="chart-title-INV">Planner 实际值与标准值</h2></div>
+              <span class="unit-label">金额 · USD</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chart-INV"></canvas></div>
+            <div id="chart-empty-INV" class="empty-chart" hidden>当前筛选范围内没有可比较的数据。</div>
+          </section>
+          <section class="panel detail-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">PLANNER × WHS</p><h2>WHS 达标明细</h2></div>
+              <span id="detail-count-INV" class="count-badge">0 条记录</span>
+            </div>
+            <div class="table-scroll"><table id="detail-INV"></table></div>
+          </section>
+          <div class="export-row">
+            <span>导出当前筛选视图</span>
+            <div><button class="button button-outline" type="button" data-export-pdf="INV">导出 PDF</button><button class="button button-primary" type="button" data-export-ppt="INV">导出 PowerPoint</button></div>
+          </div>
+        </section>
+
+        <section id="topic-EO" class="topic-panel" aria-label="EO 专题" hidden>
+          <div class="filter-card" id="filters-EO"></div>
+          <div class="summary-grid" id="summary-EO"></div>
+          <section id="time-note-EO" class="notice notice-info" hidden><div class="notice-icon">i</div><div><strong>当前文件没有周度记录</strong><p>请切换到“按月”查看，或更新包含每周日期的数据。</p></div></section>
+          <section class="panel chart-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">ACTUAL VS STANDARD</p><h2 id="chart-title-EO">Planner 实际值与标准值</h2></div>
+              <span class="unit-label">金额 · USD</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chart-EO"></canvas></div>
+            <div id="chart-empty-EO" class="empty-chart" hidden>当前筛选范围内没有可比较的数据。</div>
+          </section>
+          <section class="panel detail-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">PLANNER × WHS</p><h2>WHS 达标明细</h2></div>
+              <span id="detail-count-EO" class="count-badge">0 条记录</span>
+            </div>
+            <div class="table-scroll"><table id="detail-EO"></table></div>
+          </section>
+          <div class="export-row">
+            <span>导出当前筛选视图</span>
+            <div><button class="button button-outline" type="button" data-export-pdf="EO">导出 PDF</button><button class="button button-primary" type="button" data-export-ppt="EO">导出 PowerPoint</button></div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">KPI 考核 · On Hand INV / EO</footer>
+    </div>
+  </body>
+</html>
+
