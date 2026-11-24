@@ -4,7 +4,6 @@ import io
 import re
 import calendar
 import base64
-import hmac
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1639,58 +1638,38 @@ def main() -> None:
     st.caption("每周上传的数据会累积到共享历史中；所有访客查看同一份 KPI 数据。")
 
     data_dir = Path(__file__).resolve().parent / "data"
-    shared_password = get_app_secret("KPI_UPLOAD_PASSWORD")
     github_token = get_app_secret("GITHUB_TOKEN")
     with st.sidebar:
         st.header("共享数据")
-        st.caption("网站对外开放查看；上传共享数据需要管理员密码。")
-        with st.expander("管理员上传每周数据"):
-            if not shared_password or not github_token:
-                st.info("管理员上传尚未完成配置。请按部署说明在 Streamlit Cloud 设置 Secrets。")
-            else:
-                if not st.session_state.get("kpi_admin_authenticated", False):
-                    password = st.text_input("管理员密码", type="password", key="kpi_admin_password_input")
-                    if st.button("验证", key="kpi_admin_verify"):
-                        is_valid = hmac.compare_digest(
-                            password.encode("utf-8"), shared_password.encode("utf-8")
-                        )
-                        st.session_state["kpi_admin_authenticated"] = is_valid
-                        if is_valid:
-                            st.rerun()
-                        st.error("密码不正确。")
-                    st.caption("通过验证后即可把一批 Excel 数据追加到共享历史。")
+        st.caption("所有访客都可以上传；每次上传会追加为新的共享批次。")
+        if not github_token:
+            st.info("共享上传尚未配置。请在 Streamlit Cloud 的 Secrets 中设置 GitHub 写入凭据。")
+        else:
+            with st.form("kpi_shared_upload_form", clear_on_submit=True):
+                uploaded_files = st.file_uploader(
+                    "选择 Excel/CSV 文件（可多选）",
+                    type=["xlsx", "xlsm", "xls", "csv"],
+                    accept_multiple_files=True,
+                    key="kpi_shared_batch_files",
+                )
+                if uploaded_files:
+                    st.caption("本批次文件：" + "、".join(file.name for file in uploaded_files))
+                submit_upload = st.form_submit_button("追加到共享历史")
 
-                if st.session_state.get("kpi_admin_authenticated", False):
-                    st.success("管理员已验证")
-                    if st.button("退出管理员模式", key="kpi_admin_logout"):
-                        st.session_state["kpi_admin_authenticated"] = False
-                        st.rerun()
+            if submit_upload:
+                try:
+                    validated_files = validate_uploads(uploaded_files or [])
+                    archive_bytes = build_batch_archive(validated_files)
+                    batch_name = make_batch_name()
+                    commit_batch_to_github(archive_bytes, batch_name)
 
-                    with st.form("kpi_shared_upload_form", clear_on_submit=True):
-                        uploaded_files = st.file_uploader(
-                            "选择本周 Excel/CSV 文件（可多选）",
-                            type=["xlsx", "xlsm", "xls", "csv"],
-                            accept_multiple_files=True,
-                            key="kpi_shared_batch_files",
-                        )
-                        if uploaded_files:
-                            st.caption("本批次文件：" + "、".join(file.name for file in uploaded_files))
-                        submit_upload = st.form_submit_button("追加到共享历史")
-
-                    if submit_upload:
-                        try:
-                            validated_files = validate_uploads(uploaded_files or [])
-                            archive_bytes = build_batch_archive(validated_files)
-                            batch_name = make_batch_name()
-                            commit_batch_to_github(archive_bytes, batch_name)
-
-                            pending_batches = st.session_state.setdefault("kpi_pending_batches", {})
-                            pending_batches[batch_name] = validated_files
-                            st.session_state["kpi_pending_batches"] = pending_batches
-                            st.success("上传成功，已添加到共享历史。")
-                            st.info("网站正在同步新数据；其他访客刷新后即可看到更新。")
-                        except Exception as exc:
-                            st.error(f"上传失败：{exc}")
+                    pending_batches = st.session_state.setdefault("kpi_pending_batches", {})
+                    pending_batches[batch_name] = validated_files
+                    st.session_state["kpi_pending_batches"] = pending_batches
+                    st.success("上传成功，已添加到共享历史。")
+                    st.info("网站正在同步新数据；其他访客刷新后即可看到更新。")
+                except Exception as exc:
+                    st.error(f"上传失败：{exc}")
 
     sources, archive_warnings, stored_batch_names = read_shared_batches(data_dir)
     pending_batches = st.session_state.get("kpi_pending_batches", {})
@@ -1711,7 +1690,7 @@ def main() -> None:
                 st.warning(warning)
 
     if not sources:
-        st.info("目前还没有共享 KPI 数据。管理员可在左侧验证身份后，上传第一批 Excel 文件。")
+        st.info("目前还没有共享 KPI 数据。可以在左侧上传第一批 Excel 文件。")
         st.stop()
 
     with st.sidebar:
