@@ -88,7 +88,7 @@ function findColumn(headers, kind) {
     ? labels.lastIndexOf("planner") : labels.findIndex(function (label) { return label.indexOf("planner") >= 0; });
   if (kind === "whs") return labels.findIndex(function (label) { return label === "whs"; });
   if (kind === "target") {
-    const exact = labels.map(function (label, index) { return /^(target|target value|目标|目标值|标准|标准值)$/.test(label) || label.indexOf("目标") >= 0 ? index : -1; }).filter(function (index) { return index >= 0; });
+    const exact = labels.map(function (label, index) { return label.indexOf("target") === 0 || label.indexOf("standard") === 0 || label.indexOf("目标") >= 0 || label.indexOf("标准") >= 0 ? index : -1; }).filter(function (index) { return index >= 0; });
     return exact.length ? exact[exact.length - 1] : -1;
   }
   if (kind === "actual") return labels.findIndex(function (label) { return ["actual", "act", "实际", "实际值", "实绩"].indexOf(label) >= 0 || label.indexOf("actual") >= 0 || label.indexOf("实际") >= 0; });
