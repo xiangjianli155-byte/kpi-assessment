@@ -147,3 +147,5 @@ th.money { text-align: right; }
   thead th, tbody td { padding: 6px; font-size: 8pt; }
 }
 
+
+.panel[hidden] { display: none !important; }

@@ -7,7 +7,7 @@ const PLANNER_NAMES = {
   "jessie jin": "Jessie Jin", "zhang mingshuai": "Zhang Mingshuai",
   "li xiang": "Li Xiang", lixiang: "Li Xiang"
 };
-const state = { records: { INV: [], EO: [] }, grain: {}, start: {}, end: {}, planner: {}, lower: {}, charts: {} };
+const state = { records: { INV: [], EO: [] }, grain: {}, start: {}, end: {}, planner: {}, lower: {}, charts: {}, trendCharts: {} };
 
 function esc(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
@@ -177,13 +177,16 @@ function status(actual, target, lower) {
   if (actual == null || target == null) return "待更新";
   return lower ? (actual <= target ? "已达标" : "未达标") : (actual >= target ? "已达标" : "未达标");
 }
+function grainName(grain) { return grain === "year" ? "按年" : grain === "month" ? "按月" : "按周"; }
+const PLANNER_COLORS = ["#4777b9", "#18804f", "#d98a1f", "#c63d49", "#7b5cb8", "#2a9aa8", "#8a98ac"];
 function dateLabel(date, grain) {
-  return grain === "month" ? date.slice(0, 7) : date;
+  return grain === "year" ? date.slice(0, 4) : grain === "month" ? date.slice(0, 7) : date;
 }
 function defaultRange(records, grain) {
   const latest = records.map(function (row) { return row.date; }).sort().slice(-1)[0];
   if (!latest) return ["", ""];
   const date = new Date(latest + "T00:00:00Z");
+  if (grain === "year") return [latest.slice(0, 4) + "-01-01", latest.slice(0, 4) + "-12-31"];
   if (grain === "month") return [latest.slice(0, 7) + "-01", monthEnd(date.getUTCFullYear(), date.getUTCMonth() + 1)];
   const weekday = date.getUTCDay() || 7, monday = new Date(date.getTime() - (weekday - 1) * 86400000);
   const sunday = new Date(monday.getTime() + 6 * 86400000);
@@ -196,7 +199,7 @@ function renderFilters(topic) {
   const root = document.getElementById("filters-" + topic);
   const planners = plannerOptions(topic), selected = state.planner[topic] || "全部 Planner";
   root.innerHTML = '<div class="field"><label for="planner-' + topic + '">Planner</label><select id="planner-' + topic + '"><option>全部 Planner</option>' + planners.map(function (name) { return '<option' + (selected === name ? " selected" : "") + '>' + esc(name) + "</option>"; }).join("") + '</select></div>'
-    + '<div class="field"><label for="grain-' + topic + '">时间粒度</label><select id="grain-' + topic + '"><option value="week"' + (state.grain[topic] === "week" ? " selected" : "") + '>按周</option><option value="month"' + (state.grain[topic] === "month" ? " selected" : "") + '>按月</option></select></div>'
+    + '<div class="field"><label for="grain-' + topic + '">时间粒度</label><select id="grain-' + topic + '"><option value="week"' + (state.grain[topic] === "week" ? " selected" : "") + '>按周</option><option value="month"' + (state.grain[topic] === "month" ? " selected" : "") + '>按月</option><option value="year"' + (state.grain[topic] === "year" ? " selected" : "") + '>按年</option></select></div>'
     + '<div class="field date-field"><label>日期范围</label><div class="date-range"><input id="start-' + topic + '" type="date" value="' + esc(state.start[topic] || "") + '" aria-label="开始日期"><span>至</span><input id="end-' + topic + '" type="date" value="' + esc(state.end[topic] || "") + '" aria-label="结束日期"></div></div>'
     + '<div class="field"><label for="rule-' + topic + '">达标规则</label><select id="rule-' + topic + '"><option value="lower"' + (state.lower[topic] !== false ? " selected" : "") + '>实际值 ≤ 标准值</option><option value="higher"' + (state.lower[topic] === false ? " selected" : "") + '>实际值 ≥ 标准值</option></select></div>'
     + '<button class="button button-outline reset-filter" id="reset-' + topic + '" type="button">重置</button>';
@@ -252,7 +255,7 @@ function groupedByPlanner(rows, lower) {
 function chartRows(rows, grain) {
   const map = new Map();
   rows.forEach(function (row) {
-    const period = grain === "month" ? row.date.slice(0, 7) + "-01" : mondayOf(row.date);
+    const period = grain === "year" ? row.date.slice(0, 4) + "-01-01" : grain === "month" ? row.date.slice(0, 7) + "-01" : mondayOf(row.date);
     const key = [row.planner, row.whs, period].join("\u0000");
     const prior = map.get(key);
     if (!prior || row.date.localeCompare(prior.date) >= 0) map.set(key, Object.assign({}, row, { period: period }));
@@ -322,10 +325,72 @@ function drawChart(topic, selectedRows, lower) {
         { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), backgroundColor: pointColors, borderRadius: 4 }
       ] }, options: Object.assign(chartOptions(false), { datasets: { bar: { maxBarThickness: 44 } } }) };
     }
-    document.getElementById("chart-title-" + topic).textContent = planner + " 实际值与标准值（" + (grain === "month" ? "按月" : "按周") + "）";
+    document.getElementById("chart-title-" + topic).textContent = planner + " 实际值与标准值（" + grainName(grain) + "）";
   }
   if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
   state.charts[topic] = new window.Chart(canvas.getContext("2d"), config);
+}
+function isWeeklyUnavailable(topic) {
+  const dates = Array.from(new Set(state.records[topic].map(function (row) { return row.date; }))).sort();
+  const gaps = dates.slice(1).map(function (date, index) { return (new Date(date + "T00:00:00Z") - new Date(dates[index] + "T00:00:00Z")) / 86400000; });
+  return (state.grain[topic] || "week") === "week" && dates.length > 1 && median(gaps) > 14;
+}
+function drawTrend(topic, allPlanner) {
+  const panel = document.getElementById("trend-panel-" + topic);
+  if (!panel) return;
+  const detail = document.getElementById("detail-panel-" + topic);
+  panel.hidden = !allPlanner;
+  if (detail) detail.hidden = allPlanner;
+  if (state.trendCharts[topic]) { state.trendCharts[topic].destroy(); state.trendCharts[topic] = null; }
+  if (!allPlanner) return;
+  const grain = state.grain[topic] || "week", lower = state.lower[topic] !== false;
+  const canvas = document.getElementById("trend-" + topic), empty = document.getElementById("trend-empty-" + topic);
+  const unavailable = isWeeklyUnavailable(topic);
+  const rows = unavailable ? [] : chartRows(state.records[topic], grain);
+  const periods = Array.from(new Set(rows.map(function (row) { return row.period; }))).sort();
+  document.getElementById("trend-title-" + topic).textContent = "各 Planner 实际值趋势（" + grainName(grain) + "）";
+  if (!periods.length) {
+    canvas.parentElement.hidden = true; empty.hidden = false;
+    empty.textContent = unavailable ? "当前工作簿记录的是月度数据，请切换为按月或按年查看。" : "当前没有可绘制趋势的数据。";
+    return;
+  }
+  canvas.parentElement.hidden = false; empty.hidden = true;
+  const planners = Array.from(new Set(rows.map(function (row) { return row.planner; }))).sort(function (a, b) { return a.localeCompare(b); });
+  const lookup = new Map(rows.map(function (row) { return [row.planner + "\u0000" + row.period, row]; }));
+  const datasets = planners.map(function (name, index) {
+    const color = PLANNER_COLORS[index % PLANNER_COLORS.length];
+    return {
+      label: name, borderColor: color, backgroundColor: color, borderWidth: 2.5, spanGaps: true,
+      cubicInterpolationMode: "monotone", pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: "#fff", pointBorderColor: color, pointBorderWidth: 2,
+      data: periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; })
+    };
+  });
+  function rowOf(context) { return lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]); }
+  if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
+  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { labels: periods.map(function (period) { return dateLabel(period, grain); }), datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top", align: "end", labels: { usePointStyle: true, boxWidth: 8, color: COLORS.ink, font: { size: 11 } } },
+        datalabels: { display: false },
+        tooltip: { callbacks: {
+          label: function (context) { return context.dataset.label + ": " + money(context.parsed.y); },
+          afterLabel: function (context) {
+            const row = rowOf(context);
+            if (!row || row.target == null || row.actual == null) return "";
+            return "标准值 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, lower);
+          }
+        } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#7a8799", maxRotation: 0, autoSkip: true } },
+        y: { beginAtZero: true, grid: { color: "#edf1f5" }, ticks: { color: "#7a8799", callback: currencyAxis } }
+      }
+    }
+  });
 }
 function renderTopic(topic) {
   if (!state.records[topic].length) return;
@@ -347,6 +412,7 @@ function renderTopic(topic) {
   if (weeklyUnavailable) chartEmpty.textContent = "当前工作簿记录的是月度数据，请切换为按月查看。";
   else chartEmpty.textContent = "当前筛选范围内没有可比较的数据。";
   drawChart(topic, filtered, state.lower[topic] !== false);
+  drawTrend(topic, planner === "全部 Planner");
 }
 function showToast(message) {
   const toast = document.createElement("div"); toast.className = "toast"; toast.textContent = message;
@@ -357,7 +423,7 @@ function activateTopic(topic) {
   TOPICS.forEach(function (item) {
     const panel = document.getElementById("topic-" + item), active = item === topic;
     panel.classList.toggle("active", active); panel.hidden = !active;
-    if (active) window.setTimeout(function () { if (state.charts[item]) state.charts[item].resize(); }, 0);
+    if (active) window.setTimeout(function () { if (state.charts[item]) state.charts[item].resize(); if (state.trendCharts[item]) state.trendCharts[item].resize(); }, 0);
   });
   document.body.dataset.activeTopic = topic;
 }
@@ -375,7 +441,7 @@ async function exportPpt(topic) {
   const result = status(rows.some(function (r) { return r.actual != null; }) ? actual : null, rows.some(function (r) { return r.target != null; }) ? target : null, lower);
   const slide = deck.addSlide(); slide.background = { color: "F4F7FB" };
   slide.addText("KPI 考核 · " + (topic === "INV" ? "On Hand INV" : "EO") + " 专题", { x: 0.55, y: 0.3, w: 12.1, h: 0.45, fontSize: 23, bold: true, color: "18263B" });
-  slide.addText("Planner：" + planner + "    时间：" + start + " 至 " + end + "    粒度：" + (grain === "week" ? "按周" : "按月"), { x: 0.6, y: 0.85, w: 12, h: 0.3, fontSize: 11, color: "77849A" });
+  slide.addText("Planner：" + planner + "    时间：" + start + " 至 " + end + "    粒度：" + grainName(grain), { x: 0.6, y: 0.85, w: 12, h: 0.3, fontSize: 11, color: "77849A" });
   const cards = [["实际值", money(rows.some(function (r) { return r.actual != null; }) ? actual : null)], ["标准值", money(rows.some(function (r) { return r.target != null; }) ? target : null)], ["差额", money(rows.length ? actual - target : null, true)], ["考核结果", result]];
   cards.forEach(function (item, index) {
     const x = 0.6 + index * 3.1; slide.addShape(deck.ShapeType.roundRect, { x: x, y: 1.25, w: 2.85, h: 0.78, rectRadius: 0.08, line: { color: "E1E7EF" }, fill: { color: index === 3 ? (result === "已达标" ? "E9F6EE" : result === "未达标" ? "FFF0F0" : "FFF6E6") : "FFFFFF" } });
@@ -385,10 +451,20 @@ async function exportPpt(topic) {
   const chartCanvas = document.getElementById("chart-" + topic);
   if (chartCanvas && chartCanvas.parentElement.hidden === false) slide.addImage({ data: chartCanvas.toDataURL("image/png", 1), x: 0.65, y: 2.2, w: 12, h: 3.6, transparency: 0 });
   slide.addText("金额单位：USD", { x: 10.5, y: 5.85, w: 2, h: 0.2, fontSize: 8, color: "77849A", align: "right" });
+  const trendCanvas = document.getElementById("trend-" + topic);
+  const showTrend = !!(trendCanvas && planner === "全部 Planner" && state.trendCharts[topic]);
+  if (showTrend) {
+    const trendSlide = deck.addSlide(); trendSlide.background = { color: "FFFFFF" };
+    trendSlide.addText("各 Planner 实际值趋势（" + grainName(grain) + "）", { x: 0.55, y: 0.3, w: 12, h: 0.45, fontSize: 20, bold: true, color: "18263B" });
+    const ratio = trendCanvas.height / trendCanvas.width; let w = 12.1, h = w * ratio;
+    if (h > 5.4) { h = 5.4; w = h / ratio; }
+    trendSlide.addImage({ data: trendCanvas.toDataURL("image/png", 1), x: 0.6 + (12.1 - w) / 2, y: 1.1, w: w, h: h });
+    trendSlide.addText("金额单位：USD", { x: 10.5, y: 6.7, w: 2, h: 0.2, fontSize: 8, color: "77849A", align: "right" });
+  }
   const chunks = [];
   for (let i = 0; i < rows.length; i += 16) chunks.push(rows.slice(i, i + 16));
   if (!chunks.length) chunks.push([]);
-  chunks.forEach(function (chunk, page) {
+  (showTrend ? [] : chunks).forEach(function (chunk, page) {
     const detail = deck.addSlide(); detail.background = { color: "FFFFFF" };
     detail.addText("Planner × WHS 达标明细" + (chunks.length > 1 ? " · " + (page + 1) : ""), { x: 0.55, y: 0.3, w: 12, h: 0.45, fontSize: 20, bold: true, color: "18263B" });
     const data = [["Planner", "WHS", "期间", "实际值（USD）", "标准值（USD）", "差额（USD）", "状态"]];

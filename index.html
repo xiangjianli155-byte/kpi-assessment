@@ -63,7 +63,15 @@
             <div class="chart-wrap"><canvas id="chart-INV"></canvas></div>
             <div id="chart-empty-INV" class="empty-chart" hidden>当前筛选范围内没有可比较的数据。</div>
           </section>
-          <section class="panel detail-panel">
+          <section id="trend-panel-INV" class="panel chart-panel" hidden>
+            <div class="panel-heading">
+              <div><p class="eyebrow">TREND · ALL PLANNERS</p><h2 id="trend-title-INV">各 Planner 实际值趋势</h2></div>
+              <span class="unit-label">金额 · USD · 点击图例可隐藏/显示</span>
+            </div>
+            <div class="chart-wrap"><canvas id="trend-INV"></canvas></div>
+            <div id="trend-empty-INV" class="empty-chart" hidden>当前没有可绘制趋势的数据。</div>
+          </section>
+          <section id="detail-panel-INV" class="panel detail-panel">
             <div class="panel-heading">
               <div><p class="eyebrow">PLANNER × WHS</p><h2>WHS 达标明细</h2></div>
               <span id="detail-count-INV" class="count-badge">0 条记录</span>
