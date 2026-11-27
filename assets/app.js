@@ -214,7 +214,21 @@ function status(actual, target, lower) {
   return lower ? (actual <= target ? "已达标" : "未达标") : (actual >= target ? "已达标" : "未达标");
 }
 function grainName(grain) { return grain === "year" ? "按年" : grain === "month" ? "按月" : "按周"; }
-const PLANNER_COLORS = ["#4777b9", "#18804f", "#d98a1f", "#c63d49", "#7b5cb8", "#2a9aa8", "#8a98ac"];
+const PLANNER_COLORS = ["#3d74b8", "#1f9d6b", "#e8963a", "#d6455d", "#7a5fc0", "#1fa3b8", "#8a98ac"];
+const PLANNER_COLOR_MAP = { "li chao": "#3d74b8", "she xiaolei": "#1f9d6b", "xin mei": "#e8963a", "jessie jin": "#d6455d", "zhang mingshuai": "#7a5fc0", "li xiang": "#1fa3b8", "多人负责": "#8a98ac", "未分配": "#b9c3d0" };
+function plannerColor(name, index) { return PLANNER_COLOR_MAP[String(name).toLowerCase()] || PLANNER_COLORS[index % PLANNER_COLORS.length]; }
+function hexA(hex, alpha) {
+  const value = parseInt(hex.slice(1), 16);
+  return "rgba(" + (value >> 16) + "," + ((value >> 8) & 255) + "," + (value & 255) + "," + alpha + ")";
+}
+function axisLabels(periods, grain) {
+  const years = new Set(periods.map(function (period) { return period.slice(0, 4); }));
+  return periods.map(function (period) {
+    if (grain === "year") return period.slice(0, 4);
+    if (grain === "month") return years.size > 1 ? period.slice(0, 7) : Number(period.slice(5, 7)) + "月";
+    return years.size > 1 ? period : period.slice(5);
+  });
+}
 function dateLabel(date, grain) {
   return grain === "year" ? date.slice(0, 4) : grain === "month" ? date.slice(0, 7) : date;
 }
@@ -347,20 +361,7 @@ function drawChart(topic, selectedRows, lower) {
     ] }, options: Object.assign(chartOptions(true), { indexAxis: "y", plugins: Object.assign(chartOptions(true).plugins, { legend: { position: "top", align: "end" } }) }) };
     document.getElementById("chart-title-" + topic).textContent = "各 Planner 实际值与标准值";
   } else {
-    const labels = chartData.map(function (row) { return dateLabel(row.period, grain); });
-    const line = true;
-    const pointColors = chartData.map(function (row) { const result = status(row.actual, row.target, lower); return result === "未达标" ? COLORS.red : result === "已达标" ? COLORS.green : COLORS.blue; });
-    if (line) {
-      config = { type: "line", data: { labels: labels, datasets: [
-        { label: "标准值（USD）", data: chartData.map(function (row) { return row.target; }), borderColor: COLORS.gray, borderDash: [6, 5], borderWidth: 2, pointRadius: 3, datalabels: { display: true, align: "bottom", color: COLORS.gray, formatter: function (value) { return value == null ? "" : money(value); } }, cubicInterpolationMode: "monotone" },
-        { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), borderColor: COLORS.blue, backgroundColor: pointColors, pointBackgroundColor: pointColors, pointBorderColor: "#fff", pointBorderWidth: 2, pointRadius: 5, borderWidth: 3, spanGaps: true, cubicInterpolationMode: "monotone" }
-      ] }, options: chartOptions(false) };
-    } else {
-      config = { type: "bar", data: { labels: labels, datasets: [
-        { label: "标准值（USD）", data: chartData.map(function (row) { return row.target; }), backgroundColor: COLORS.gray, borderRadius: 4, datalabels: { display: true, color: "#fff", formatter: function (value) { return value == null ? "" : money(value); } } },
-        { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), backgroundColor: pointColors, borderRadius: 4 }
-      ] }, options: Object.assign(chartOptions(false), { datasets: { bar: { maxBarThickness: 44 } } }) };
-    }
+    config = singleLineConfig(chartData, grain, lower);
     document.getElementById("chart-title-" + topic).textContent = planner + " 实际值与标准值趋势（" + grainName(grain) + "）";
   }
   if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
@@ -371,56 +372,173 @@ function isWeeklyUnavailable(topic) {
   const gaps = dates.slice(1).map(function (date, index) { return (new Date(date + "T00:00:00Z") - new Date(dates[index] + "T00:00:00Z")) / 86400000; });
   return (state.grain[topic] || "week") === "week" && dates.length > 1 && median(gaps) > 14;
 }
+function setChartDefaults() {
+  if (!window.Chart) return;
+  if (window.ChartDataLabels) window.Chart.register(window.ChartDataLabels);
+  window.Chart.defaults.font.family = getComputedStyle(document.body).fontFamily || "sans-serif";
+  window.Chart.defaults.color = "#7a8799";
+}
+const crosshairPlugin = {
+  id: "crosshair",
+  afterDatasetsDraw: function (chart) {
+    const active = chart.tooltip && chart.tooltip.getActiveElements ? chart.tooltip.getActiveElements() : [];
+    if (!active.length) return;
+    const x = active[0].element.x, area = chart.chartArea, ctx = chart.ctx;
+    ctx.save(); ctx.beginPath(); ctx.moveTo(x, area.top); ctx.lineTo(x, area.bottom);
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(38,56,81,.18)"; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.restore();
+  }
+};
+const endLabelsPlugin = {
+  id: "endLabels",
+  afterDatasetsDraw: function (chart, args, options) {
+    if (!options || !options.enabled) return;
+    const ctx = chart.ctx, family = window.Chart.defaults.font.family, items = [];
+    chart.data.datasets.forEach(function (dataset, index) {
+      if (!chart.isDatasetVisible(index)) return;
+      let last = -1; dataset.data.forEach(function (value, position) { if (value != null) last = position; });
+      const point = chart.getDatasetMeta(index).data[last];
+      if (last < 0 || !point) return;
+      items.push({ x: point.x, y: point.y, ly: point.y, color: dataset.borderColor, name: dataset.label, value: money(dataset.data[last]) });
+    });
+    items.sort(function (a, b) { return a.y - b.y; });
+    for (let i = 1; i < items.length; i += 1) if (items[i].ly - items[i - 1].ly < 16) items[i].ly = items[i - 1].ly + 16;
+    if (items.length) { const overflow = items[items.length - 1].ly - (chart.chartArea.bottom - 2); if (overflow > 0) items.forEach(function (item) { item.ly -= overflow; }); }
+    ctx.save(); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    items.forEach(function (item) {
+      const tx = item.x + 13;
+      if (Math.abs(item.ly - item.y) > 2) { ctx.beginPath(); ctx.moveTo(item.x + 6, item.y); ctx.lineTo(tx - 3, item.ly); ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.strokeStyle = item.color; ctx.stroke(); ctx.globalAlpha = 1; }
+      ctx.font = "700 12px " + family; ctx.fillStyle = item.color; ctx.fillText(item.name, tx, item.ly);
+      const width = ctx.measureText(item.name).width;
+      ctx.font = "600 12px " + family; ctx.fillStyle = "#5b6b80"; ctx.fillText("  " + item.value, tx + width, item.ly);
+    });
+    ctx.restore();
+  }
+};
+function lineScales() {
+  return {
+    x: { offset: true, grid: { display: false }, border: { display: false }, ticks: { color: "#7a8799", maxRotation: 0, autoSkip: true, font: { size: 12 } } },
+    y: { beginAtZero: true, border: { display: false }, grid: { color: "#eef2f6" }, ticks: { color: "#7a8799", maxTicksLimit: 5, padding: 8, callback: currencyAxis, font: { size: 12 } } }
+  };
+}
+function tooltipStyle(callbacks) {
+  return { backgroundColor: "#ffffff", titleColor: COLORS.ink, bodyColor: "#42536a", borderColor: "#dbe3ec", borderWidth: 1, padding: 12, cornerRadius: 10, boxPadding: 5, usePointStyle: true,
+    titleFont: { weight: "700", size: 12 }, bodyFont: { size: 12 }, itemSort: function (a, b) { return (b.parsed.y || 0) - (a.parsed.y || 0); }, callbacks: callbacks };
+}
+function gradientFill(color) {
+  return function (context) {
+    const area = context.chart.chartArea;
+    if (!area) return hexA(color, 0.1);
+    const gradient = context.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+    gradient.addColorStop(0, hexA(color, 0.22)); gradient.addColorStop(1, hexA(color, 0));
+    return gradient;
+  };
+}
+function renderLegend(container, chart) {
+  container.innerHTML = "";
+  const sets = chart.data.datasets;
+  if (!container || sets.length < 2) { container.hidden = true; return; }
+  container.hidden = false;
+  sets.forEach(function (dataset, index) {
+    const chip = document.createElement("button"); chip.type = "button"; chip.className = "legend-chip";
+    chip.innerHTML = '<i style="background:' + dataset.borderColor + '"></i><span>' + esc(dataset.label) + "</span>";
+    chip.addEventListener("click", function () {
+      chart.setDatasetVisibility(index, !chart.isDatasetVisible(index));
+      chip.classList.toggle("off", !chart.isDatasetVisible(index)); chart.update();
+    });
+    container.appendChild(chip);
+  });
+  const hint = document.createElement("span"); hint.className = "legend-hint"; hint.textContent = "点击名称可隐藏/显示"; container.appendChild(hint);
+}
 function plannerLineConfig(rows, grain, opts) {
-  if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
+  setChartDefaults();
   const periods = Array.from(new Set(rows.map(function (row) { return row.period; }))).sort();
   const planners = Array.from(new Set(rows.map(function (row) { return row.planner; }))).sort(function (a, b) { return a.localeCompare(b); });
   const lookup = new Map(rows.map(function (row) { return [row.planner + "\u0000" + row.period, row]; }));
-  const pad = Math.round(Math.min(opts.valueInLabel ? 175 : 125, (opts.width || 800) * 0.36));
+  const single = planners.length === 1, manyPoints = periods.length > 12;
+  const measure = document.createElement("canvas").getContext("2d"); measure.font = "700 12px " + window.Chart.defaults.font.family;
+  let widest = 0;
   const datasets = planners.map(function (name, index) {
-    const color = PLANNER_COLORS[index % PLANNER_COLORS.length];
+    const color = plannerColor(name, index);
     const data = periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; });
     let last = -1; data.forEach(function (value, position) { if (value != null) last = position; });
-    return {
-      label: name, data: data, borderColor: color, backgroundColor: color, borderWidth: 2.5, spanGaps: true,
-      cubicInterpolationMode: "monotone", pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: "#fff", pointBorderColor: color, pointBorderWidth: 2,
-      datalabels: opts.labelAll
-        ? { display: function (context) { return context.dataset.data[context.dataIndex] != null; }, align: "top", anchor: "end", color: color, font: { size: 10, weight: "700" }, formatter: function (value) { return money(value); } }
-        : { display: function (context) { return context.dataIndex === last; }, align: "right", anchor: "end", offset: 8, clamp: true, color: color, font: { size: 11, weight: "700" }, formatter: function (value) { return name + (opts.valueInLabel ? " " + money(value) : ""); } }
+    if (last >= 0) widest = Math.max(widest, measure.measureText(name + "  " + money(data[last])).width);
+    const dataset = {
+      label: name, data: data, borderColor: color, backgroundColor: single ? gradientFill(color) : color, fill: single, borderWidth: 2.5, spanGaps: true,
+      cubicInterpolationMode: "monotone", pointHoverRadius: 7, pointBorderColor: color, pointBorderWidth: 2,
+      pointRadius: function (context) { return periods.length === 1 || context.dataIndex === last ? 5 : manyPoints ? 0 : 3; },
+      pointBackgroundColor: function (context) { return context.dataIndex === last ? color : "#fff"; }
     };
+    if (opts.labelAll) dataset.datalabels = { display: function (context) { return context.dataset.data[context.dataIndex] != null; }, align: "top", anchor: "end", offset: 4, color: "#42536a", font: { size: 11, weight: "700" }, formatter: function (value) { return money(value); } };
+    return dataset;
   });
-  function rowOf(context) { return lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]); }
+  const pad = opts.labelAll ? 16 : Math.round(Math.min(widest + 34, (opts.width || 800) * 0.5));
+  const fullLabels = periods.map(function (period) { return dateLabel(period, grain); });
   return {
-    type: "line",
-    data: { labels: periods.map(function (period) { return dateLabel(period, grain); }), datasets: datasets },
+    type: "line", plugins: [crosshairPlugin, endLabelsPlugin],
+    data: { labels: axisLabels(periods, grain), datasets: datasets },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
-      layout: { padding: { top: 16, right: opts.labelAll ? 14 : pad } },
+      layout: { padding: { top: opts.labelAll ? 22 : 12, right: pad } },
       interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { position: "top", align: "end", labels: { usePointStyle: true, boxWidth: 8, color: COLORS.ink, font: { size: 11 } } },
-        tooltip: { callbacks: {
-          label: function (context) { return context.dataset.label + ": " + money(context.parsed.y); },
+        legend: { display: false },
+        datalabels: opts.labelAll ? {} : { display: false },
+        endLabels: { enabled: !opts.labelAll },
+        tooltip: tooltipStyle({
+          title: function (items) { return items.length ? fullLabels[items[0].dataIndex] : ""; },
+          label: function (context) { return " " + context.dataset.label + "  " + money(context.parsed.y); },
           afterLabel: function (context) {
-            const row = rowOf(context);
+            const row = lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]);
             if (!opts.showTarget || !row || row.target == null || row.actual == null) return "";
-            return "标准值 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, opts.lower);
+            return "   标准 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, opts.lower);
           }
-        } }
+        })
       },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: "#7a8799", maxRotation: 0, autoSkip: true } },
-        y: { beginAtZero: true, grid: { color: "#edf1f5" }, ticks: { color: "#7a8799", callback: currencyAxis } }
-      }
+      scales: lineScales()
+    }
+  };
+}
+function singleLineConfig(chartData, grain, lower) {
+  setChartDefaults();
+  const periods = chartData.map(function (row) { return row.period; });
+  const fullLabels = periods.map(function (period) { return dateLabel(period, grain); });
+  const pointColors = chartData.map(function (row) { const result = status(row.actual, row.target, lower); return result === "未达标" ? COLORS.red : result === "已达标" ? COLORS.green : COLORS.blue; });
+  const lastIndex = chartData.length - 1, labelEvery = chartData.length <= 10;
+  return {
+    type: "line", plugins: [crosshairPlugin],
+    data: { labels: axisLabels(periods, grain), datasets: [
+      { label: "标准值", data: chartData.map(function (row) { return row.target; }), borderColor: "#9aa7b8", backgroundColor: "#9aa7b8", borderDash: [6, 5], borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, cubicInterpolationMode: "monotone", order: 2,
+        datalabels: { display: function (context) { return context.dataIndex === lastIndex && context.dataset.data[lastIndex] != null; }, align: "bottom", anchor: "end", offset: 6, color: "#7a8799", font: { size: 11, weight: "600" }, formatter: function (value) { return "标准 " + money(value); } } },
+      { label: "实际值", data: chartData.map(function (row) { return row.actual; }), borderColor: COLORS.blue, backgroundColor: gradientFill(COLORS.blue), fill: true, borderWidth: 3, spanGaps: true, cubicInterpolationMode: "monotone", order: 1,
+        pointBackgroundColor: pointColors, pointBorderColor: "#fff", pointBorderWidth: 2, pointRadius: 5, pointHoverRadius: 7,
+        datalabels: { display: function (context) { return context.dataset.data[context.dataIndex] != null && (labelEvery || context.dataIndex === lastIndex); }, align: "top", anchor: "end", offset: 4, color: COLORS.ink, font: { size: 11, weight: "700" }, formatter: function (value) { return money(value); } } }
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      layout: { padding: { top: 24, right: 16 } },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top", align: "start", labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, padding: 16, color: COLORS.ink, font: { size: 12, weight: "600" } } },
+        tooltip: tooltipStyle({
+          title: function (items) { return items.length ? fullLabels[items[0].dataIndex] : ""; },
+          label: function (context) { return " " + context.dataset.label + "  " + money(context.parsed.y); },
+          afterBody: function (items) {
+            const row = items.length ? chartData[items[0].dataIndex] : null;
+            return !row || row.target == null || row.actual == null ? "" : "差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, lower);
+          }
+        })
+      },
+      scales: lineScales()
     }
   };
 }
 function drawTrend(topic, allPlanner) {
   const panel = document.getElementById("trend-panel-" + topic);
   if (!panel) return;
-  const detail = document.getElementById("detail-panel-" + topic);
+  const detail = document.getElementById("detail-panel-" + topic), legend = document.getElementById("legend-" + topic);
   panel.hidden = !allPlanner;
   if (detail) detail.hidden = allPlanner;
+  if (legend) legend.hidden = true;
   if (state.trendCharts[topic]) { state.trendCharts[topic].destroy(); state.trendCharts[topic] = null; }
   if (!allPlanner) return;
   const grain = state.grain[topic] || "week", lower = state.lower[topic] !== false;
@@ -434,7 +552,8 @@ function drawTrend(topic, allPlanner) {
     return;
   }
   canvas.parentElement.hidden = false; empty.hidden = true;
-  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, valueInLabel: false, labelAll: false, width: canvas.parentElement.clientWidth }));
+  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, labelAll: false, width: canvas.parentElement.clientWidth }));
+  if (legend) renderLegend(legend, state.trendCharts[topic]);
 }
 function renderAgingFilters() {
   const root = document.getElementById("filters-AGING");
@@ -449,7 +568,8 @@ function renderAgingFilters() {
 function drawAging() {
   if (state.charts.AGING) { state.charts.AGING.destroy(); state.charts.AGING = null; }
   const planner = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month", all = planner === "全部 Planner";
-  const canvas = document.getElementById("chart-AGING"), empty = document.getElementById("chart-empty-AGING");
+  const canvas = document.getElementById("chart-AGING"), empty = document.getElementById("chart-empty-AGING"), legend = document.getElementById("legend-AGING");
+  legend.hidden = true;
   const unavailable = isWeeklyUnavailable("AGING");
   let rows = unavailable ? [] : chartRows(state.records.AGING, grain);
   if (!all) rows = rows.filter(function (row) { return row.planner === planner; });
@@ -460,7 +580,8 @@ function drawAging() {
     return;
   }
   canvas.parentElement.hidden = false; empty.hidden = true;
-  state.charts.AGING = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: true, showTarget: false, valueInLabel: all, labelAll: !all, width: canvas.parentElement.clientWidth }));
+  state.charts.AGING = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: true, showTarget: false, labelAll: !all, width: canvas.parentElement.clientWidth }));
+  renderLegend(legend, state.charts.AGING);
 }
 function renderAging() {
   if (!state.records.AGING.length) return;
