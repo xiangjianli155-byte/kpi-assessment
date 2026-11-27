@@ -465,9 +465,14 @@ function plannerLineConfig(rows, grain, opts) {
     return { name: name, color: plannerColor(name, index), data: periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; }) };
   });
   if (opts.includeTotal && planners.length > 1) {
-    series.push({ name: "合计", color: "#263851", dashed: true, hidden: true, data: periods.map(function (period) {
-      return rows.filter(function (row) { return row.period === period; }).reduce(function (sum, row) { return sum + (row.actual || 0); }, 0);
-    }) });
+    const totalData = periods.map(function (period) {
+      const inPeriod = rows.filter(function (row) { return row.period === period; });
+      const targets = inPeriod.filter(function (row) { return row.target != null; });
+      const actual = inPeriod.reduce(function (sum, row) { return sum + (row.actual || 0); }, 0);
+      lookup.set("合计\u0000" + period, { planner: "合计", period: period, actual: actual, target: targets.length ? targets.reduce(function (sum, row) { return sum + row.target; }, 0) : null });
+      return actual;
+    });
+    series.push({ name: "合计", color: "#163a63", total: true, data: totalData });
   }
   const measure = document.createElement("canvas").getContext("2d"); measure.font = "700 12px " + window.Chart.defaults.font.family;
   let widest = 0;
@@ -476,8 +481,8 @@ function plannerLineConfig(rows, grain, opts) {
     let last = -1; data.forEach(function (value, position) { if (value != null) last = position; });
     if (last >= 0 && !item.hidden) widest = Math.max(widest, measure.measureText(item.name + "  " + money(data[last])).width);
     const dataset = {
-      label: item.name, data: data, borderColor: color, backgroundColor: single ? gradientFill(color) : color, fill: single, borderWidth: 2.5, spanGaps: true,
-      cubicInterpolationMode: "monotone", pointHoverRadius: 7, pointBorderColor: color, pointBorderWidth: 2, hidden: !!item.hidden, borderDash: item.dashed ? [6, 5] : [],
+      label: item.name, data: data, borderColor: color, backgroundColor: single ? gradientFill(color) : color, fill: single, borderWidth: item.total ? 3.5 : 2.5, spanGaps: true, order: item.total ? 0 : 1,
+      cubicInterpolationMode: "monotone", pointHoverRadius: 7, pointBorderColor: color, pointBorderWidth: 2, hidden: !!item.hidden, borderDash: [],
       pointRadius: function (context) { return periods.length === 1 || context.dataIndex === last ? 5 : manyPoints ? 0 : 3; },
       pointBackgroundColor: function (context) { return context.dataIndex === last ? color : "#fff"; }
     };
@@ -564,14 +569,14 @@ function drawTrend(topic, allPlanner) {
   const canvas = document.getElementById("trend-" + topic), empty = document.getElementById("trend-empty-" + topic);
   const unavailable = isWeeklyUnavailable(topic);
   const rows = unavailable ? [] : chartRows(state.records[topic], grain);
-  document.getElementById("trend-title-" + topic).textContent = "各 Planner 实际值趋势（" + grainName(grain) + "）";
+  document.getElementById("trend-title-" + topic).textContent = "各 Planner 与合计趋势（" + grainName(grain) + "）";
   if (!rows.length) {
     canvas.parentElement.hidden = true; empty.hidden = false;
     empty.textContent = unavailable ? "当前工作簿记录的是月度数据，请切换为按月或按年查看。" : "当前没有可绘制趋势的数据。";
     return;
   }
   canvas.parentElement.hidden = false; empty.hidden = true;
-  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, labelAll: false, width: canvas.parentElement.clientWidth }));
+  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, includeTotal: true, labelAll: false, width: canvas.parentElement.clientWidth }));
   if (legend) renderLegend(legend, state.trendCharts[topic]);
 }
 function fullRange(records) {
