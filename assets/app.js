@@ -441,6 +441,7 @@ function renderLegend(container, chart) {
   sets.forEach(function (dataset, index) {
     const chip = document.createElement("button"); chip.type = "button"; chip.className = "legend-chip";
     chip.innerHTML = '<i style="background:' + dataset.borderColor + '"></i><span>' + esc(dataset.label) + "</span>";
+    chip.classList.toggle("off", !chart.isDatasetVisible(index));
     chip.addEventListener("click", function () {
       chart.setDatasetVisibility(index, !chart.isDatasetVisible(index));
       chip.classList.toggle("off", !chart.isDatasetVisible(index)); chart.update();
@@ -449,29 +450,41 @@ function renderLegend(container, chart) {
   });
   const hint = document.createElement("span"); hint.className = "legend-hint"; hint.textContent = "点击名称可隐藏/显示"; container.appendChild(hint);
 }
+function changeText(now, prev) {
+  if (now == null || prev == null) return "";
+  const diff = now - prev, sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
+  return (diff > 0 ? "▲ " : diff < 0 ? "▼ " : "") + money(Math.abs(diff)) + (prev ? "（" + sign + Math.abs(diff / prev * 100).toFixed(1) + "%）" : "");
+}
 function plannerLineConfig(rows, grain, opts) {
   setChartDefaults();
   const periods = Array.from(new Set(rows.map(function (row) { return row.period; }))).sort();
   const planners = Array.from(new Set(rows.map(function (row) { return row.planner; }))).sort(function (a, b) { return a.localeCompare(b); });
   const lookup = new Map(rows.map(function (row) { return [row.planner + "\u0000" + row.period, row]; }));
   const single = planners.length === 1, manyPoints = periods.length > 12;
+  const series = planners.map(function (name, index) {
+    return { name: name, color: plannerColor(name, index), data: periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; }) };
+  });
+  if (opts.includeTotal && planners.length > 1) {
+    series.push({ name: "合计", color: "#263851", dashed: true, hidden: true, data: periods.map(function (period) {
+      return rows.filter(function (row) { return row.period === period; }).reduce(function (sum, row) { return sum + (row.actual || 0); }, 0);
+    }) });
+  }
   const measure = document.createElement("canvas").getContext("2d"); measure.font = "700 12px " + window.Chart.defaults.font.family;
   let widest = 0;
-  const datasets = planners.map(function (name, index) {
-    const color = plannerColor(name, index);
-    const data = periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; });
+  const datasets = series.map(function (item) {
+    const color = item.color, data = item.data;
     let last = -1; data.forEach(function (value, position) { if (value != null) last = position; });
-    if (last >= 0) widest = Math.max(widest, measure.measureText(name + "  " + money(data[last])).width);
+    if (last >= 0 && !item.hidden) widest = Math.max(widest, measure.measureText(item.name + "  " + money(data[last])).width);
     const dataset = {
-      label: name, data: data, borderColor: color, backgroundColor: single ? gradientFill(color) : color, fill: single, borderWidth: 2.5, spanGaps: true,
-      cubicInterpolationMode: "monotone", pointHoverRadius: 7, pointBorderColor: color, pointBorderWidth: 2,
+      label: item.name, data: data, borderColor: color, backgroundColor: single ? gradientFill(color) : color, fill: single, borderWidth: 2.5, spanGaps: true,
+      cubicInterpolationMode: "monotone", pointHoverRadius: 7, pointBorderColor: color, pointBorderWidth: 2, hidden: !!item.hidden, borderDash: item.dashed ? [6, 5] : [],
       pointRadius: function (context) { return periods.length === 1 || context.dataIndex === last ? 5 : manyPoints ? 0 : 3; },
       pointBackgroundColor: function (context) { return context.dataIndex === last ? color : "#fff"; }
     };
     if (opts.labelAll) dataset.datalabels = { display: function (context) { return context.dataset.data[context.dataIndex] != null; }, align: "top", anchor: "end", offset: 4, color: "#42536a", font: { size: 11, weight: "700" }, formatter: function (value) { return money(value); } };
     return dataset;
   });
-  const pad = opts.labelAll ? 16 : Math.round(Math.min(widest + 34, (opts.width || 800) * 0.5));
+  const pad = opts.labelAll ? 16 : Math.round(Math.min(Math.max(widest, 60) + 40, (opts.width || 800) * 0.5));
   const fullLabels = periods.map(function (period) { return dateLabel(period, grain); });
   return {
     type: "line", plugins: [crosshairPlugin, endLabelsPlugin],
@@ -488,9 +501,15 @@ function plannerLineConfig(rows, grain, opts) {
           title: function (items) { return items.length ? fullLabels[items[0].dataIndex] : ""; },
           label: function (context) { return " " + context.dataset.label + "  " + money(context.parsed.y); },
           afterLabel: function (context) {
-            const row = lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]);
-            if (!opts.showTarget || !row || row.target == null || row.actual == null) return "";
-            return "   标准 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, opts.lower);
+            const lines = [], row = lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]);
+            if (opts.showTarget && row && row.target != null && row.actual != null) lines.push("   标准 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, opts.lower));
+            if (opts.showChange) {
+              const data = context.dataset.data; let prev = null;
+              for (let i = context.dataIndex - 1; i >= 0; i -= 1) if (data[i] != null) { prev = data[i]; break; }
+              const text = changeText(data[context.dataIndex], prev);
+              if (text) lines.push("   较上期 " + text);
+            }
+            return lines;
           }
         })
       },
@@ -555,32 +574,67 @@ function drawTrend(topic, allPlanner) {
   state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, labelAll: false, width: canvas.parentElement.clientWidth }));
   if (legend) renderLegend(legend, state.trendCharts[topic]);
 }
+function fullRange(records) {
+  const dates = records.map(function (row) { return row.date; }).sort();
+  return dates.length ? [dates[0], dates[dates.length - 1]] : ["", ""];
+}
 function renderAgingFilters() {
   const root = document.getElementById("filters-AGING");
   const planners = plannerOptions("AGING"), selected = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month";
+  const bounds = fullRange(state.records.AGING);
   root.innerHTML = '<div class="field"><label for="planner-AGING">Planner</label><select id="planner-AGING"><option>全部 Planner</option>' + planners.map(function (name) { return '<option' + (selected === name ? " selected" : "") + '>' + esc(name) + "</option>"; }).join("") + '</select></div>'
     + '<div class="field"><label for="grain-AGING">时间粒度</label><select id="grain-AGING">' + [["week", "按周"], ["month", "按月"], ["year", "按年"]].map(function (item) { return '<option value="' + item[0] + '"' + (grain === item[0] ? " selected" : "") + ">" + item[1] + "</option>"; }).join("") + '</select></div>'
+    + '<div class="field date-field"><label>日期范围</label><div class="date-range"><input id="start-AGING" type="date" value="' + esc(state.start.AGING || "") + '" aria-label="开始日期"><span>至</span><input id="end-AGING" type="date" value="' + esc(state.end.AGING || "") + '" aria-label="结束日期"></div></div>'
     + '<button class="button button-outline reset-filter" id="reset-AGING" type="button">重置</button>';
   document.getElementById("planner-AGING").addEventListener("change", function (event) { state.planner.AGING = event.target.value; renderAging(); });
   document.getElementById("grain-AGING").addEventListener("change", function (event) { state.grain.AGING = event.target.value; renderAging(); });
-  document.getElementById("reset-AGING").addEventListener("click", function () { state.planner.AGING = "全部 Planner"; state.grain.AGING = "month"; renderAging(); });
+  ["start", "end"].forEach(function (key) { document.getElementById(key + "-AGING").addEventListener("change", function (event) { state[key].AGING = event.target.value; renderAging(); }); });
+  document.getElementById("reset-AGING").addEventListener("click", function () { state.planner.AGING = "全部 Planner"; state.grain.AGING = "month"; state.start.AGING = bounds[0]; state.end.AGING = bounds[1]; renderAging(); });
+}
+function agingSummary(rows, grain) {
+  const totals = new Map();
+  rows.forEach(function (row) { totals.set(row.period, (totals.get(row.period) || 0) + (row.actual || 0)); });
+  const periods = Array.from(totals.keys()).sort(), values = periods.map(function (period) { return totals.get(period); });
+  const n = periods.length, latest = n ? values[n - 1] : null;
+  let peak = -1; values.forEach(function (value, index) { if (peak < 0 || value > values[peak]) peak = index; });
+  function label(index) { return index >= 0 && index < n ? dateLabel(periods[index], grain) : ""; }
+  function delta(from) {
+    if (latest == null || from == null) return "—";
+    const diff = latest - from, pct = from ? Math.abs(diff / from * 100).toFixed(1) + "%" : "";
+    return '<span class="' + (diff > 0 ? "delta-up" : diff < 0 ? "delta-down" : "") + '">' + (diff > 0 ? "▲ " : diff < 0 ? "▼ " : "") + money(Math.abs(diff)) + (pct ? "<small>" + (diff > 0 ? "+" : diff < 0 ? "-" : "") + pct + "</small>" : "") + "</span>";
+  }
+  const more = n > 1;
+  const cards = [
+    ["最新 Aging >12", money(latest), n ? "所选范围最新一期 · " + label(n - 1) : "所选范围没有数据"],
+    ["较上期", delta(more ? values[n - 2] : null), more ? "对比 " + label(n - 2) + " · 下降为绿色" : "需要至少 2 期数据"],
+    ["较期初", delta(more ? values[0] : null), more ? "对比 " + label(0) + " · 下降为绿色" : "需要至少 2 期数据"],
+    ["期间峰值", money(peak >= 0 ? values[peak] : null), peak >= 0 ? "出现在 " + label(peak) : "—"]
+  ];
+  const text = n ? "最新 " + label(n - 1) + "：" + money(latest) + (more ? "　较上期 " + (changeText(latest, values[n - 2]) || "—") : "") : "";
+  return { html: cards.map(function (item) { return '<article class="summary-card"><div class="summary-label">' + item[0] + '</div><div class="summary-value">' + item[1] + '</div><div class="summary-note">' + item[2] + "</div></article>"; }).join(""), text: text };
 }
 function drawAging() {
   if (state.charts.AGING) { state.charts.AGING.destroy(); state.charts.AGING = null; }
   const planner = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month", all = planner === "全部 Planner";
   const canvas = document.getElementById("chart-AGING"), empty = document.getElementById("chart-empty-AGING"), legend = document.getElementById("legend-AGING");
   legend.hidden = true;
+  let start = state.start.AGING || "", end = state.end.AGING || "";
+  if (start && end && start > end) { const swap = start; start = end; end = swap; }
   const unavailable = isWeeklyUnavailable("AGING");
-  let rows = unavailable ? [] : chartRows(state.records.AGING, grain);
+  const inRange = state.records.AGING.filter(function (row) { return (!start || row.date >= start) && (!end || row.date <= end); });
+  let rows = unavailable ? [] : chartRows(inRange, grain);
   if (!all) rows = rows.filter(function (row) { return row.planner === planner; });
+  const summary = agingSummary(rows, grain);
+  document.getElementById("summary-AGING").innerHTML = summary.html;
+  state.agingText = summary.text;
   document.getElementById("chart-title-AGING").textContent = (all ? "各 Planner" : planner) + " Aging >12 个月趋势（" + grainName(grain) + "）";
   if (!rows.length) {
     canvas.parentElement.hidden = true; empty.hidden = false;
-    empty.textContent = unavailable ? "当前数据是月度记录，请切换为按月或按年查看。" : "没有可绘制的 Aging >12 数据。";
+    empty.textContent = unavailable ? "当前数据是月度记录，请切换为按月或按年查看。" : "所选日期范围内没有 Aging >12 数据，请调整日期范围。";
     return;
   }
   canvas.parentElement.hidden = false; empty.hidden = true;
-  state.charts.AGING = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: true, showTarget: false, labelAll: !all, width: canvas.parentElement.clientWidth }));
+  state.charts.AGING = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: true, showTarget: false, showChange: true, includeTotal: all, labelAll: !all, width: canvas.parentElement.clientWidth }));
   renderLegend(legend, state.charts.AGING);
 }
 function renderAging() {
@@ -632,7 +686,7 @@ async function exportAgingPpt(deck) {
   const canvas = document.getElementById("chart-AGING");
   const slide = deck.addSlide(); slide.background = { color: "FFFFFF" };
   slide.addText("Movex KPI · Aging >12 个月", { x: 0.55, y: 0.3, w: 12.1, h: 0.45, fontSize: 22, bold: true, color: "18263B" });
-  slide.addText("Planner：" + planner + "    粒度：" + grainName(grain), { x: 0.6, y: 0.85, w: 12, h: 0.3, fontSize: 11, color: "77849A" });
+  slide.addText("Planner：" + planner + "    粒度：" + grainName(grain) + "    范围：" + (state.start.AGING || "—") + " 至 " + (state.end.AGING || "—") + (state.agingText ? "    " + state.agingText : ""), { x: 0.6, y: 0.85, w: 12.1, h: 0.3, fontSize: 11, color: "77849A" });
   if (canvas && state.charts.AGING && canvas.parentElement.hidden === false) {
     const ratio = canvas.height / canvas.width; let w = 12.1, h = w * ratio;
     if (h > 5.4) { h = 5.4; w = h / ratio; }
@@ -730,6 +784,7 @@ async function loadWorkbook() {
     else { document.querySelector('[data-topic="' + topic + '"]').disabled = true; document.getElementById("topic-" + topic).hidden = true; }
   });
   state.grain.AGING = "month"; state.planner.AGING = "全部 Planner";
+  { const span = fullRange(state.records.AGING); state.start.AGING = span[0]; state.end.AGING = span[1]; }
   if (!state.records.AGING.length) { document.querySelector('[data-topic="AGING"]').disabled = true; document.getElementById("topic-AGING").hidden = true; }
   const latest = state.records.INV.concat(state.records.EO).map(function (row) { return row.date; }).sort().slice(-1)[0];
   document.getElementById("source-label").textContent = latest ? "数据更新至 " + latest : "KPI 数据已加载";
