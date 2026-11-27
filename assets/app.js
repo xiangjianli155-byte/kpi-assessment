@@ -170,8 +170,10 @@ function latestUnique(records, keys) {
 }
 function money(value, signed) {
   if (value == null || !Number.isFinite(Number(value))) return "—";
-  const amount = Number(value), prefix = signed && amount > 0 ? "+" : amount < 0 ? "-" : "";
-  return prefix + "$" + Math.abs(amount).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const amount = Number(value), abs = Math.abs(amount), rounded = Math.round(abs);
+  const prefix = rounded === 0 ? "" : signed && amount > 0 ? "+" : amount < 0 ? "-" : "";
+  const text = abs >= 1000 ? Math.round(abs / 1000).toLocaleString("en-US") + "K" : rounded.toLocaleString("en-US");
+  return prefix + "$" + text;
 }
 function status(actual, target, lower) {
   if (actual == null || target == null) return "待更新";
@@ -276,7 +278,7 @@ function mondayOf(day) {
   const date = new Date(day + "T00:00:00Z"), weekday = date.getUTCDay() || 7;
   return new Date(date.getTime() - (weekday - 1) * 86400000).toISOString().slice(0, 10);
 }
-function currencyAxis(value) { return "$" + Number(value).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+function currencyAxis(value) { return money(value); }
 function chartOptions(horizontal) {
   return {
     responsive: true, maintainAspectRatio: false, animation: false,
@@ -299,7 +301,7 @@ function drawChart(topic, selectedRows, lower) {
   const empty = document.getElementById("chart-empty-" + topic), canvas = document.getElementById("chart-" + topic);
   const planner = state.planner[topic] || "全部 Planner", grain = state.grain[topic] || "week";
   const allPlanner = planner === "全部 Planner";
-  const chartData = allPlanner ? groupedByPlanner(selectedRows, lower) : chartRows(selectedRows, grain).filter(function (row) { return row.planner === planner; });
+  const chartData = allPlanner ? groupedByPlanner(selectedRows, lower) : chartRows(isWeeklyUnavailable(topic) ? [] : state.records[topic], grain).filter(function (row) { return row.planner === planner; });
   if (!chartData.length) { canvas.parentElement.hidden = true; empty.hidden = false; return; }
   canvas.parentElement.hidden = false; empty.hidden = true;
   let config;
@@ -312,12 +314,12 @@ function drawChart(topic, selectedRows, lower) {
     document.getElementById("chart-title-" + topic).textContent = "各 Planner 实际值与标准值";
   } else {
     const labels = chartData.map(function (row) { return dateLabel(row.period, grain); });
-    const line = grain === "week" && chartData.length > 1;
+    const line = true;
     const pointColors = chartData.map(function (row) { const result = status(row.actual, row.target, lower); return result === "未达标" ? COLORS.red : result === "已达标" ? COLORS.green : COLORS.blue; });
     if (line) {
       config = { type: "line", data: { labels: labels, datasets: [
-        { label: "标准值（USD）", data: chartData.map(function (row) { return row.target; }), borderColor: COLORS.gray, borderDash: [6, 5], borderWidth: 2, pointRadius: 2, datalabels: { display: true, align: "bottom", color: COLORS.gray, formatter: function (value) { return value == null ? "" : money(value); } }, tension: 0.2 },
-        { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), borderColor: COLORS.blue, backgroundColor: pointColors, pointBackgroundColor: pointColors, pointBorderColor: "#fff", pointBorderWidth: 2, pointRadius: 5, borderWidth: 3, spanGaps: true, tension: 0.2 }
+        { label: "标准值（USD）", data: chartData.map(function (row) { return row.target; }), borderColor: COLORS.gray, borderDash: [6, 5], borderWidth: 2, pointRadius: 3, datalabels: { display: true, align: "bottom", color: COLORS.gray, formatter: function (value) { return value == null ? "" : money(value); } }, cubicInterpolationMode: "monotone" },
+        { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), borderColor: COLORS.blue, backgroundColor: pointColors, pointBackgroundColor: pointColors, pointBorderColor: "#fff", pointBorderWidth: 2, pointRadius: 5, borderWidth: 3, spanGaps: true, cubicInterpolationMode: "monotone" }
       ] }, options: chartOptions(false) };
     } else {
       config = { type: "bar", data: { labels: labels, datasets: [
@@ -325,7 +327,7 @@ function drawChart(topic, selectedRows, lower) {
         { label: "实际值（USD）", data: chartData.map(function (row) { return row.actual; }), backgroundColor: pointColors, borderRadius: 4 }
       ] }, options: Object.assign(chartOptions(false), { datasets: { bar: { maxBarThickness: 44 } } }) };
     }
-    document.getElementById("chart-title-" + topic).textContent = planner + " 实际值与标准值（" + grainName(grain) + "）";
+    document.getElementById("chart-title-" + topic).textContent = planner + " 实际值与标准值趋势（" + grainName(grain) + "）";
   }
   if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
   state.charts[topic] = new window.Chart(canvas.getContext("2d"), config);
