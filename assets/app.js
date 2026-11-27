@@ -1,13 +1,14 @@
 import * as XLSX from "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
 
 const TOPICS = ["INV", "EO"];
+const PANELS = ["INV", "EO", "AGING"];
 const COLORS = { red: "#c63d49", green: "#18804f", gray: "#8a98ac", blue: "#4777b9", ink: "#263851" };
 const PLANNER_NAMES = {
   "li chao": "Li Chao", "she xiaolei": "She xiaolei", "xin mei": "Xin mei",
   "jessie jin": "Jessie Jin", "zhang mingshuai": "Zhang Mingshuai",
   "li xiang": "Li Xiang", lixiang: "Li Xiang"
 };
-const state = { records: { INV: [], EO: [] }, grain: {}, start: {}, end: {}, planner: {}, lower: {}, charts: {}, trendCharts: {} };
+const state = { records: { INV: [], EO: [], AGING: [] }, grain: {}, start: {}, end: {}, planner: {}, lower: {}, charts: {}, trendCharts: {} };
 
 function esc(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
@@ -115,25 +116,27 @@ function parseSheet(rows, sheetName, filename, topic) {
   const headerIndex = headerRowFor(rows);
   if (headerIndex < 0) throw new Error("找不到 Planner 和 WHS 表头");
   const headers = rows[headerIndex] || [];
+  const body = rows.slice(headerIndex + 1), stopAt = body.findIndex(function (row) { return /^(total|whs)$/i.test(clean((row || [])[findColumn(headers, "whs")])); });
+  const dataRows = stopAt >= 0 ? body.slice(0, stopAt) : body;
   const plannerCol = findColumn(headers, "planner"), whsCol = findColumn(headers, "whs");
   const targetCol = findColumn(headers, "target"), dateCol = findColumn(headers, "date"), actualCol = findColumn(headers, "actual");
   if (plannerCol < 0 || whsCol < 0) throw new Error("找不到 Planner 或 WHS 列");
   const year = workbookYear(filename), dateColumns = [];
   for (let column = 0; column < headers.length; column += 1) {
-    const period = parsePeriod(headers[column], year);
-    if (period && rows.slice(headerIndex + 1).some(function (row) { return toNumber((row || [])[column]) != null; })) dateColumns.push({ column: column, period: period });
+    const period = isActualHeader(headers[column]) ? parsePeriod(headers[column], year) : null;
+    if (period && dataRows.some(function (row) { return toNumber((row || [])[column]) != null; })) dateColumns.push({ column: column, period: period });
   }
   if (!dateColumns.length && headerIndex > 0) {
     const parent = rows[headerIndex - 1] || [];
     headers.forEach(function (label, column) {
       if (["act", "actual", "实际", "实际值", "实绩"].indexOf(headerLabel(label)) >= 0) {
         const period = parsePeriod(parent[column], year);
-        if (period && rows.slice(headerIndex + 1).some(function (row) { return toNumber((row || [])[column]) != null; })) dateColumns.push({ column: column, period: period });
+        if (period && dataRows.some(function (row) { return toNumber((row || [])[column]) != null; })) dateColumns.push({ column: column, period: period });
       }
     });
   }
   const records = [];
-  rows.slice(headerIndex + 1).forEach(function (row, rowOffset) {
+  dataRows.forEach(function (row, rowOffset) {
     row = row || [];
     const whs = normalizeWHS(row[whsCol]);
     if (!whs) return;
@@ -153,6 +156,37 @@ function parseSheet(rows, sheetName, filename, topic) {
     }
   });
   if (!records.length) throw new Error("未识别到带日期、实际值或目标值的记录");
+  return records;
+}
+function isActualHeader(value) {
+  if (value instanceof Date) return true;
+  return !/vs|gap|target|planner|aging|增|减|差|标准|目标/i.test(clean(value));
+}
+function parseAging(rows, fallbackDate, year) {
+  const headerIndex = headerRowFor(rows);
+  if (headerIndex < 0) return [];
+  const headers = rows[headerIndex] || [], parent = headerIndex > 0 ? rows[headerIndex - 1] || [] : [];
+  const plannerCol = findColumn(headers, "planner"), whsCol = findColumn(headers, "whs");
+  if (plannerCol < 0 || whsCol < 0) return [];
+  const body = rows.slice(headerIndex + 1);
+  const stopAt = body.findIndex(function (row) { return /^(total|whs)$/i.test(clean((row || [])[whsCol])); });
+  const dataRows = stopAt >= 0 ? body.slice(0, stopAt) : body;
+  const columns = [];
+  headers.forEach(function (label, column) {
+    if (/aging\s*[>＞]\s*12/i.test(clean(label))) columns.push({ column: column, date: parsePeriod(parent[column], year) || fallbackDate });
+  });
+  const records = [];
+  dataRows.forEach(function (row, offset) {
+    row = row || [];
+    const whs = normalizeWHS(row[whsCol]);
+    if (!whs) return;
+    const planner = normalizePlanner(row[plannerCol]);
+    columns.forEach(function (info) {
+      const actual = toNumber(row[info.column]);
+      if (actual == null || !info.date) return;
+      records.push({ topic: "AGING", planner: planner, whs: whs, date: info.date, actual: actual, target: null, order: offset * 1000 + info.column, source: "Aging >12" });
+    });
+  });
   return records;
 }
 function median(values) {
@@ -337,6 +371,50 @@ function isWeeklyUnavailable(topic) {
   const gaps = dates.slice(1).map(function (date, index) { return (new Date(date + "T00:00:00Z") - new Date(dates[index] + "T00:00:00Z")) / 86400000; });
   return (state.grain[topic] || "week") === "week" && dates.length > 1 && median(gaps) > 14;
 }
+function plannerLineConfig(rows, grain, opts) {
+  if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
+  const periods = Array.from(new Set(rows.map(function (row) { return row.period; }))).sort();
+  const planners = Array.from(new Set(rows.map(function (row) { return row.planner; }))).sort(function (a, b) { return a.localeCompare(b); });
+  const lookup = new Map(rows.map(function (row) { return [row.planner + "\u0000" + row.period, row]; }));
+  const pad = Math.round(Math.min(opts.valueInLabel ? 175 : 125, (opts.width || 800) * 0.36));
+  const datasets = planners.map(function (name, index) {
+    const color = PLANNER_COLORS[index % PLANNER_COLORS.length];
+    const data = periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; });
+    let last = -1; data.forEach(function (value, position) { if (value != null) last = position; });
+    return {
+      label: name, data: data, borderColor: color, backgroundColor: color, borderWidth: 2.5, spanGaps: true,
+      cubicInterpolationMode: "monotone", pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: "#fff", pointBorderColor: color, pointBorderWidth: 2,
+      datalabels: opts.labelAll
+        ? { display: function (context) { return context.dataset.data[context.dataIndex] != null; }, align: "top", anchor: "end", color: color, font: { size: 10, weight: "700" }, formatter: function (value) { return money(value); } }
+        : { display: function (context) { return context.dataIndex === last; }, align: "right", anchor: "end", offset: 8, clamp: true, color: color, font: { size: 11, weight: "700" }, formatter: function (value) { return name + (opts.valueInLabel ? " " + money(value) : ""); } }
+    };
+  });
+  function rowOf(context) { return lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]); }
+  return {
+    type: "line",
+    data: { labels: periods.map(function (period) { return dateLabel(period, grain); }), datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      layout: { padding: { top: 16, right: opts.labelAll ? 14 : pad } },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top", align: "end", labels: { usePointStyle: true, boxWidth: 8, color: COLORS.ink, font: { size: 11 } } },
+        tooltip: { callbacks: {
+          label: function (context) { return context.dataset.label + ": " + money(context.parsed.y); },
+          afterLabel: function (context) {
+            const row = rowOf(context);
+            if (!opts.showTarget || !row || row.target == null || row.actual == null) return "";
+            return "标准值 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, opts.lower);
+          }
+        } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#7a8799", maxRotation: 0, autoSkip: true } },
+        y: { beginAtZero: true, grid: { color: "#edf1f5" }, ticks: { color: "#7a8799", callback: currencyAxis } }
+      }
+    }
+  };
+}
 function drawTrend(topic, allPlanner) {
   const panel = document.getElementById("trend-panel-" + topic);
   if (!panel) return;
@@ -349,50 +427,49 @@ function drawTrend(topic, allPlanner) {
   const canvas = document.getElementById("trend-" + topic), empty = document.getElementById("trend-empty-" + topic);
   const unavailable = isWeeklyUnavailable(topic);
   const rows = unavailable ? [] : chartRows(state.records[topic], grain);
-  const periods = Array.from(new Set(rows.map(function (row) { return row.period; }))).sort();
   document.getElementById("trend-title-" + topic).textContent = "各 Planner 实际值趋势（" + grainName(grain) + "）";
-  if (!periods.length) {
+  if (!rows.length) {
     canvas.parentElement.hidden = true; empty.hidden = false;
     empty.textContent = unavailable ? "当前工作簿记录的是月度数据，请切换为按月或按年查看。" : "当前没有可绘制趋势的数据。";
     return;
   }
   canvas.parentElement.hidden = false; empty.hidden = true;
-  const planners = Array.from(new Set(rows.map(function (row) { return row.planner; }))).sort(function (a, b) { return a.localeCompare(b); });
-  const lookup = new Map(rows.map(function (row) { return [row.planner + "\u0000" + row.period, row]; }));
-  const datasets = planners.map(function (name, index) {
-    const color = PLANNER_COLORS[index % PLANNER_COLORS.length];
-    return {
-      label: name, borderColor: color, backgroundColor: color, borderWidth: 2.5, spanGaps: true,
-      cubicInterpolationMode: "monotone", pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: "#fff", pointBorderColor: color, pointBorderWidth: 2,
-      data: periods.map(function (period) { const row = lookup.get(name + "\u0000" + period); return row ? row.actual : null; })
-    };
-  });
-  function rowOf(context) { return lookup.get(context.dataset.label + "\u0000" + periods[context.dataIndex]); }
-  if (window.ChartDataLabels && window.Chart) window.Chart.register(window.ChartDataLabels);
-  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { labels: periods.map(function (period) { return dateLabel(period, grain); }), datasets: datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { position: "top", align: "end", labels: { usePointStyle: true, boxWidth: 8, color: COLORS.ink, font: { size: 11 } } },
-        datalabels: { display: false },
-        tooltip: { callbacks: {
-          label: function (context) { return context.dataset.label + ": " + money(context.parsed.y); },
-          afterLabel: function (context) {
-            const row = rowOf(context);
-            if (!row || row.target == null || row.actual == null) return "";
-            return "标准值 " + money(row.target) + " · 差额 " + money(row.actual - row.target, true) + " · " + status(row.actual, row.target, lower);
-          }
-        } }
-      },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: "#7a8799", maxRotation: 0, autoSkip: true } },
-        y: { beginAtZero: true, grid: { color: "#edf1f5" }, ticks: { color: "#7a8799", callback: currencyAxis } }
-      }
-    }
-  });
+  state.trendCharts[topic] = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: lower, showTarget: true, valueInLabel: false, labelAll: false, width: canvas.parentElement.clientWidth }));
+}
+function renderAgingFilters() {
+  const root = document.getElementById("filters-AGING");
+  const planners = plannerOptions("AGING"), selected = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month";
+  root.innerHTML = '<div class="field"><label for="planner-AGING">Planner</label><select id="planner-AGING"><option>全部 Planner</option>' + planners.map(function (name) { return '<option' + (selected === name ? " selected" : "") + '>' + esc(name) + "</option>"; }).join("") + '</select></div>'
+    + '<div class="field"><label for="grain-AGING">时间粒度</label><select id="grain-AGING">' + [["week", "按周"], ["month", "按月"], ["year", "按年"]].map(function (item) { return '<option value="' + item[0] + '"' + (grain === item[0] ? " selected" : "") + ">" + item[1] + "</option>"; }).join("") + '</select></div>'
+    + '<button class="button button-outline reset-filter" id="reset-AGING" type="button">重置</button>';
+  document.getElementById("planner-AGING").addEventListener("change", function (event) { state.planner.AGING = event.target.value; renderAging(); });
+  document.getElementById("grain-AGING").addEventListener("change", function (event) { state.grain.AGING = event.target.value; renderAging(); });
+  document.getElementById("reset-AGING").addEventListener("click", function () { state.planner.AGING = "全部 Planner"; state.grain.AGING = "month"; renderAging(); });
+}
+function drawAging() {
+  if (state.charts.AGING) { state.charts.AGING.destroy(); state.charts.AGING = null; }
+  const planner = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month", all = planner === "全部 Planner";
+  const canvas = document.getElementById("chart-AGING"), empty = document.getElementById("chart-empty-AGING");
+  const unavailable = isWeeklyUnavailable("AGING");
+  let rows = unavailable ? [] : chartRows(state.records.AGING, grain);
+  if (!all) rows = rows.filter(function (row) { return row.planner === planner; });
+  document.getElementById("chart-title-AGING").textContent = (all ? "各 Planner" : planner) + " Aging >12 个月趋势（" + grainName(grain) + "）";
+  if (!rows.length) {
+    canvas.parentElement.hidden = true; empty.hidden = false;
+    empty.textContent = unavailable ? "当前数据是月度记录，请切换为按月或按年查看。" : "没有可绘制的 Aging >12 数据。";
+    return;
+  }
+  canvas.parentElement.hidden = false; empty.hidden = true;
+  state.charts.AGING = new window.Chart(canvas.getContext("2d"), plannerLineConfig(rows, grain, { lower: true, showTarget: false, valueInLabel: all, labelAll: !all, width: canvas.parentElement.clientWidth }));
+}
+function renderAging() {
+  if (!state.records.AGING.length) return;
+  renderAgingFilters();
+  const periods = Array.from(new Set(state.records.AGING.map(function (row) { return row.date; }))).sort();
+  const note = document.getElementById("aging-note");
+  note.hidden = periods.length > 1;
+  if (periods.length === 1) note.querySelector("p").textContent = "目前 Aging >12 只有 " + periods[0] + " 这一期，所以每个 Planner 只显示一个点。以后每月在 INV 工作表新增一列“Aging >12个月”，并在该列第 2 行填写日期，曲线就会自动连成线。";
+  drawAging();
 }
 function renderTopic(topic) {
   if (!state.records[topic].length) return;
@@ -422,18 +499,33 @@ function showToast(message) {
 }
 function activateTopic(topic) {
   document.querySelectorAll(".topic-tab").forEach(function (tab) { tab.classList.toggle("active", tab.dataset.topic === topic); });
-  TOPICS.forEach(function (item) {
+  PANELS.forEach(function (item) {
     const panel = document.getElementById("topic-" + item), active = item === topic;
     panel.classList.toggle("active", active); panel.hidden = !active;
     if (active) window.setTimeout(function () { if (state.charts[item]) state.charts[item].resize(); if (state.trendCharts[item]) state.trendCharts[item].resize(); }, 0);
   });
   document.body.dataset.activeTopic = topic;
 }
+async function exportAgingPpt(deck) {
+  const planner = state.planner.AGING || "全部 Planner", grain = state.grain.AGING || "month";
+  const canvas = document.getElementById("chart-AGING");
+  const slide = deck.addSlide(); slide.background = { color: "FFFFFF" };
+  slide.addText("Movex KPI · Aging >12 个月", { x: 0.55, y: 0.3, w: 12.1, h: 0.45, fontSize: 22, bold: true, color: "18263B" });
+  slide.addText("Planner：" + planner + "    粒度：" + grainName(grain), { x: 0.6, y: 0.85, w: 12, h: 0.3, fontSize: 11, color: "77849A" });
+  if (canvas && state.charts.AGING && canvas.parentElement.hidden === false) {
+    const ratio = canvas.height / canvas.width; let w = 12.1, h = w * ratio;
+    if (h > 5.4) { h = 5.4; w = h / ratio; }
+    slide.addImage({ data: canvas.toDataURL("image/png", 1), x: 0.6 + (12.1 - w) / 2, y: 1.3, w: w, h: h });
+  }
+  slide.addText("金额单位：USD", { x: 10.5, y: 6.85, w: 2, h: 0.2, fontSize: 8, color: "77849A", align: "right" });
+  await deck.writeFile({ fileName: "KPI_AGING_" + grain + ".pptx" });
+}
 async function exportPpt(topic) {
   const Pptx = window.PptxGenJS || window.pptxgen;
   if (!Pptx) { showToast("PowerPoint 导出组件加载失败，请刷新后重试。"); return; }
   const deck = new Pptx(); deck.layout = "LAYOUT_WIDE"; deck.author = "KPI 考核"; deck.subject = topic + " 专题 KPI"; deck.title = "KPI 考核";
   deck.theme = { headFontFace: "Aptos Display", bodyFontFace: "Aptos", lang: "zh-CN" };
+  if (topic === "AGING") { await exportAgingPpt(deck); return; }
   const planner = state.planner[topic] || "全部 Planner", grain = state.grain[topic] || "week";
   const start = state.start[topic] || "", end = state.end[topic] || "";
   const filtered = state.records[topic].filter(function (row) { return (!start || row.date >= start) && (!end || row.date <= end) && (planner === "全部 Planner" || row.planner === planner); });
@@ -503,6 +595,12 @@ async function loadWorkbook() {
     if (!sheetName) return;
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null, blankrows: false });
     state.records[topic] = parseSheet(rows, sheetName, "current_kpi.xlsx", topic);
+    if (topic === "INV") {
+      try {
+        const latestInv = state.records.INV.map(function (row) { return row.date; }).sort().slice(-1)[0];
+        state.records.AGING = parseAging(rows, latestInv, workbookYear("current_kpi.xlsx"));
+      } catch (error) { console.error(error); state.records.AGING = []; }
+    }
   });
   if (!state.records.INV.length && !state.records.EO.length) throw new Error("未找到名称包含 INV 或 EO 的工作表。");
   TOPICS.forEach(function (topic) {
@@ -510,12 +608,15 @@ async function loadWorkbook() {
     if (records.length) { const range = defaultRange(records, "week"); state.start[topic] = range[0]; state.end[topic] = range[1]; }
     else { document.querySelector('[data-topic="' + topic + '"]').disabled = true; document.getElementById("topic-" + topic).hidden = true; }
   });
+  state.grain.AGING = "month"; state.planner.AGING = "全部 Planner";
+  if (!state.records.AGING.length) { document.querySelector('[data-topic="AGING"]').disabled = true; document.getElementById("topic-AGING").hidden = true; }
   const latest = state.records.INV.concat(state.records.EO).map(function (row) { return row.date; }).sort().slice(-1)[0];
   document.getElementById("source-label").textContent = latest ? "数据更新至 " + latest : "KPI 数据已加载";
   const statusBadge = document.getElementById("data-status"); statusBadge.classList.add("ready"); statusBadge.lastChild.textContent = " 数据已更新";
   document.getElementById("load-error").hidden = true;
   document.querySelectorAll(".topic-tab").forEach(function (tab) { tab.addEventListener("click", function () { activateTopic(tab.dataset.topic); }); });
   TOPICS.forEach(function (topic) { if (state.records[topic].length) renderTopic(topic); });
+  renderAging();
   activateTopic(state.records.INV.length ? "INV" : "EO");
 }
 setupExports();

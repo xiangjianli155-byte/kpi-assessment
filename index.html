@@ -32,7 +32,7 @@
         <section class="intro-row">
           <div>
             <p class="eyebrow">OPERATIONS · KPI REVIEW</p>
-            <h1>团队绩效总览</h1>
+            <h1>Movex KPI</h1>
             <p class="intro-copy">按专题、Planner、期间和 WHS 查看实际值与目标表现。</p>
           </div>
           <div class="source-pill" id="source-label">数据源：data/current_kpi.xlsx</div>
@@ -48,6 +48,7 @@
 
         <nav class="topic-tabs" aria-label="KPI 专题">
           <button class="topic-tab active" type="button" data-topic="INV"><span class="tab-dot inv-dot"></span>On Hand INV 专题</button>
+          <button class="topic-tab" type="button" data-topic="AGING"><span class="tab-dot aging-dot"></span>Aging &gt;12 专题</button>
           <button class="topic-tab" type="button" data-topic="EO"><span class="tab-dot eo-dot"></span>EO 专题</button>
         </nav>
 
@@ -84,6 +85,23 @@
           </div>
         </section>
 
+        <section id="topic-AGING" class="topic-panel" aria-label="Aging >12 专题" hidden>
+          <div class="filter-card aging-filters" id="filters-AGING"></div>
+          <section id="aging-note" class="notice notice-info" hidden><div class="notice-icon">i</div><div><strong>目前只有 1 期 Aging &gt;12 数据</strong><p></p></div></section>
+          <section class="panel chart-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">AGING &gt; 12 MONTHS</p><h2 id="chart-title-AGING">各 Planner Aging &gt;12 个月趋势</h2></div>
+              <span class="unit-label">金额 · USD（K = 千）· 点击图例可隐藏/显示</span>
+            </div>
+            <div class="chart-wrap"><canvas id="chart-AGING"></canvas></div>
+            <div id="chart-empty-AGING" class="empty-chart" hidden>没有可绘制的 Aging &gt;12 数据。</div>
+          </section>
+          <div class="export-row">
+            <span>导出当前筛选视图</span>
+            <div><button class="button button-outline" type="button" data-export-pdf="AGING">导出 PDF</button><button class="button button-primary" type="button" data-export-ppt="AGING">导出 PowerPoint</button></div>
+          </div>
+        </section>
+
         <section id="topic-EO" class="topic-panel" aria-label="EO 专题" hidden>
           <div class="filter-card" id="filters-EO"></div>
           <div class="summary-grid" id="summary-EO"></div>
@@ -110,7 +128,7 @@
         </section>
       </main>
 
-      <footer class="footer">KPI 考核 · On Hand INV / EO</footer>
+      <footer class="footer">Movex KPI · On Hand INV / Aging &gt;12 / EO</footer>
     </div>
   </body>
 </html>
